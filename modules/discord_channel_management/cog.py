@@ -721,6 +721,49 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     # CATEGORY COMMANDS #
     #####################
 
+
+    @commands.command(
+        name="createcat",
+        aliases=["createcat", "newcat", "createcategory", "newcategory", "categorycreate"],
+    )
+    async def categorycreate(self, ctx, cat_name: str = ""):
+        """Create a new category. 
+        Usage: ~categorycreate "Name"
+        """
+        await logging_utils.log_command(
+            "category", ctx.guild, ctx.channel, ctx.author
+        )
+        embed = discord_utils.create_embed()
+
+        if cat_name is None or cat_name == "":
+            embed.add_field(
+                name="Failed",
+                value=f"Error! No category name. Please give me a category to create if you want me to create it.",
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+        
+        try:
+            # create category
+            await ctx.guild.create_category(cat_name)
+        except nextcord.Forbidden:
+            embed.add_field(
+                name="Failed",
+                value="Forbidden! Have you checked if the bot has the `manage_channels` permisisons?",
+                inline=False,
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+        embed.add_field(
+            name="Success",
+            value=f"Created `{cat_name}`!",
+            inline=False,
+        )
+        await discord_utils.send_message(ctx, embed)
+
+
     @command_predicates.is_verified()
     @commands.command(
         name="sortcat",
