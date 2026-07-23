@@ -724,7 +724,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
     @commands.command(
         name="createcat",
-        aliases=["createcat", "newcat", "createcategory", "newcategory", "categorycreate"],
+        aliases=["newcat", "createcategory", "newcategory", "categorycreate"],
     )
     async def categorycreate(self, ctx, cat_name: str = ""):
         """Create a new category. 
