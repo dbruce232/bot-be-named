@@ -747,6 +747,8 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         try:
             # create category
             await ctx.guild.create_category(cat_name)
+            await self.createchannel(ctx, "general", cat_name)
+            await self.createchannel(ctx, "bot-spam", cat_name)
         except nextcord.Forbidden:
             embed.add_field(
                 name="Failed",
