@@ -286,12 +286,12 @@ class DucklingCog(commands.Cog, name="Duck"):
                 file_id=curr_sheet.id,
                 title=newname,
                 copy_permissions=True,
-                folder_id=(f_id or None),
+                folder_id=f_id,
             )
-        except gspread.exceptions.APIError:
+        except gspread.exceptions.APIError as e:
             embed.add_field(
                 name="Failed",
-                value=f"Invalid folder {f_id if f_id else "FUCK YOU"}. {curr_sheet.id if curr_sheet and curr_sheet.id else "AND YOU TOO"} Please check to see that you have the correct link and permissions.",
+                value=f"Invalid folder. {e} Please check to see that you have the correct link and permissions.",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
