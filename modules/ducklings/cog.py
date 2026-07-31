@@ -282,8 +282,6 @@ class DucklingCog(commands.Cog, name="Duck"):
         new_sheet = ""
 
         try:
-            print("HELLO", curr_sheet.id)
-            print("Hi", f_id)
             new_sheet = self.gspread_client.copy(
                 file_id=curr_sheet.id,
                 title=newname,
@@ -293,7 +291,7 @@ class DucklingCog(commands.Cog, name="Duck"):
         except gspread.exceptions.APIError:
             embed.add_field(
                 name="Failed",
-                value="Invalid folder. Please check to see that you have the correct link and permissions.",
+                value=f"Invalid folder {f_id if f_id else "FUCK YOU"}. {curr_sheet.id if curr_sheet and curr_sheet.id else "AND YOU TOO"} Please check to see that you have the correct link and permissions.",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
