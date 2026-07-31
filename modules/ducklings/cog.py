@@ -3,8 +3,7 @@ import asyncio
 import gspread
 import nextcord
 from nextcord.ext import commands
-
-from discord_channel_management.cog import DiscordChannelManagementCog
+from typing import Union
 
 from utils import (
     discord_utils,
@@ -51,6 +50,118 @@ class DucklingCog(commands.Cog, name="Duck"):
         overview_hunturl_loc = sheets_constants.OVERVIEW_HUNTURL_LOCATION
         overview.update_acell(label=overview_hunturl_loc, value=hunturl)
         return True
+
+    async def createchannel(
+        self, ctx, name: str, category_arg: Union[nextcord.CategoryChannel, str] = ""
+    ):
+        """Command to create channel in a given category. If given no category name, it defaults to current category.
+
+        Permission Category : Verified Roles only.
+        Usage: `~createchannel new-channel-name` (creates new-channel-name in the category it's called from)
+        Usage: `~createchannel new-channel-name "Category Name"`
+        """
+        # log command in console
+        await logging_utils.log_command(
+            "createchannel", ctx.guild, ctx.channel, ctx.author
+        )
+        embed = discord_utils.create_embed()
+
+        if category_arg == "":
+            category = ctx.channel.category
+        else:
+            category = category_arg
+
+        category = await discord_utils.find_category(ctx, category)
+
+        if category is None:
+            if category_arg != "":
+                embed.add_field(
+                    name="ERROR: Cannot find category",
+                    value=f"Sorry, I cannot find a category with name {category_arg}. "
+                    f"Please make sure the spelling and capitalization are correct!",
+                    inline=False,
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+            else:
+                embed.add_field(
+                    name="ERROR: Cannot find category",
+                    value=f"Sorry, I cannot find the category for the channel {ctx.channel.mention}. "
+                    f"Are you sure you are in a category?",
+                    inline=False,
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+                # Category channel limit
+        if discord_utils.category_is_full(category):
+            embed.add_field(
+                name="Failed",
+                value=f"Category `{category.name}` is already full, max limit is 50 channels.",
+            )
+            await discord_utils.send_message(ctx, embed)
+            return None
+        # Server channel limit
+        if discord_utils.server_is_full(category.guild):
+            embed.add_field(
+                name="Failed",
+                value=f"Guild `{category.guild.name}` is completely full! Max limit is 500 channels/categories/... Please contact a mod for help.",
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return None
+
+        channel = await discord_utils.createchannelgeneric(ctx.guild, category, name)
+        # Send status (success or fail)
+        if channel:
+            embed.add_field(
+                name="Success",
+                value=f"Created channel {channel.mention} in `{channel.category.name}`!",
+            )
+        else:
+            embed.add_field(
+                name="Failed",
+                value="Forbidden! Have you checked if the bot has the required permisisons?",
+            )
+        await discord_utils.send_message(ctx, embed)
+
+    async def categorycreate(self, ctx, cat_name: str = ""):
+        """Create a new category. 
+        Usage: ~categorycreate "Name"
+        """
+        await logging_utils.log_command(
+            "category", ctx.guild, ctx.channel, ctx.author
+        )
+        embed = discord_utils.create_embed()
+
+        if cat_name is None or cat_name == "":
+            embed.add_field(
+                name="Failed",
+                value=f"Error! No category name. Please give me a category to create if you want me to create it.",
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+        
+        try:
+            # create category
+            await ctx.guild.create_category(cat_name)
+            await self.createchannel(ctx, "general", cat_name)
+            await self.createchannel(ctx, "bot-spam", cat_name)
+        except nextcord.Forbidden:
+            embed.add_field(
+                name="Failed",
+                value="Forbidden! Have you checked if the bot has the `manage_channels` permisisons?",
+                inline=False,
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+        embed.add_field(
+            name="Success",
+            value=f"Created `{cat_name}`!",
+            inline=False,
+        )
+        await discord_utils.send_message(ctx, embed)
 
     async def validate_template(self, ctx: commands.Context, proposed_sheet):
             embed = discord_utils.create_embed()
@@ -215,7 +326,7 @@ class DucklingCog(commands.Cog, name="Duck"):
             hunturl = ""
 
         try:
-            await DiscordChannelManagementCog.categorycreate(ctx=ctx, cat_name=hunt_name)
+            await self.categorycreate(ctx=ctx, cat_name=hunt_name)
             await ctx.guild.create_category(f"{hunt_name} Archive")
 
             cat = await discord_utils.find_category(ctx, hunt_name)
