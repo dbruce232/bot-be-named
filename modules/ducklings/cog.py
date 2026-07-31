@@ -282,6 +282,8 @@ class DucklingCog(commands.Cog, name="Duck"):
         new_sheet = ""
 
         try:
+            print("HELLO", curr_sheet.id)
+            print("Hi", f_id)
             new_sheet = self.gspread_client.copy(
                 file_id=curr_sheet.id,
                 title=newname,
