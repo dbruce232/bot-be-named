@@ -283,15 +283,13 @@ class DucklingCog(commands.Cog, name="Duck"):
 
         try:
             new_sheet = self.gspread_client.create(
-                file_id=curr_sheet.id,
                 title=newname,
-                copy_permissions=True,
                 folder_id=f_id,
             )
         except gspread.exceptions.APIError as e:
             embed.add_field(
                 name="Failed",
-                value=f"Invalid folder. {e} Please check to see that you have the correct link and permissions.",
+                value=f"Invalid folder.  {e} Please check to see that you have the correct link and permissions.",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
