@@ -28,7 +28,8 @@ def create_gspread_client() -> gspread.Client:
     """
     Create the client to be able to access google drive (sheets)
     """
-    return gspread.service_account(filename="client_secret.json")
+    creds = get_gdrive_credentials()
+    return gspread.authorize(creds)
 
 
 def get_gdrive_credentials() -> ServiceAccountCredentials:
@@ -50,7 +51,7 @@ def get_gdrive_credentials() -> ServiceAccountCredentials:
             json.dump(json_creds, f)
     creds = ServiceAccountCredentials.from_json_keyfile_name(
         "client_secret.json", scopes
-    )
+    ).create_delegated('brucedee232@gmail.com')
     return creds
 
 
