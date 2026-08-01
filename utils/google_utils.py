@@ -51,7 +51,7 @@ def get_gdrive_credentials() -> ServiceAccountCredentials:
             json.dump(json_creds, f)
     creds = ServiceAccountCredentials.from_json_keyfile_name(
         "client_secret.json", scopes
-    ).create_delegated('brucedee232@gmail.com')
+    )
     return creds
 
 
