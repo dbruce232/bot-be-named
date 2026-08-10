@@ -27,7 +27,7 @@ JSON_PARAMS = [
 
 def create_google_drive_client():
     return gspread.oauth(
-        credentials_filename="client_secret.json",
+        credentials_filename="oauth_client_secret.json",
     )
 
 
