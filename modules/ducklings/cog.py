@@ -282,17 +282,13 @@ class DucklingCog(commands.Cog, name="Duck"):
 
         new_sheet = ""
 
-        body = {
-            'name': newname,
-            'parents': [f_id]
-        }
-
         try:
-            new_sheet = self.drive_service.files().copy(
-                fileId=curr_sheet.id,
-                body=body,
-                supportsAllDrives=True
-            ).execute()
+            new_sheet = self.gspread_client.copy(
+                file_id=curr_sheet.id,
+                title=newname,
+                copy_permissions=True,
+                folder_id=f_id,
+            )
         except Exception as e:
             embed.add_field(
                 name="Failed",
