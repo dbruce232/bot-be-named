@@ -26,18 +26,17 @@ JSON_PARAMS = [
 ]
 
 def create_google_drive_client():
-    creds = get_gdrive_credentials()
-    return build('drive', 'v3', credentials=creds)
+    return gspread.oauth(
+        credentials_filename="client_secret.json",
+    )
 
 
 def create_gspread_client() -> gspread.Client:
     """
     Create the client to be able to access google drive (sheets)
     """
-    # creds = get_gdrive_credentials()
-    return gspread.oauth(
-        credentials_filename="client_secret.json",
-    )
+    creds = get_gdrive_credentials()
+    return gspread.authorize(creds)
 
 
 def get_gdrive_credentials() -> ServiceAccountCredentials:

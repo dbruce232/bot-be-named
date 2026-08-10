@@ -283,7 +283,7 @@ class DucklingCog(commands.Cog, name="Duck"):
         new_sheet = ""
 
         try:
-            new_sheet = self.gspread_client.copy(
+            new_sheet = self.drive_service.copy(
                 file_id=curr_sheet.id,
                 title=newname,
                 copy_permissions=True,
