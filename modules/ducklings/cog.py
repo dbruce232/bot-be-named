@@ -4,6 +4,7 @@ import gspread
 import nextcord
 from nextcord.ext import commands
 from typing import Union
+from googleapiclient.discovery import build
 
 from utils import (
     discord_utils,
@@ -281,15 +282,23 @@ class DucklingCog(commands.Cog, name="Duck"):
 
         new_sheet = ""
 
+        drive_service = build('drive', 'v3', credentials=self.gspread_client.auth)
+
+        body = {
+            'name': newname,
+            'parents': [f_id]
+        }
+
         try:
-            new_sheet = self.gspread_client.create(
-                title=newname,
-                folder_id=f_id,
-            )
-        except gspread.exceptions.APIError as e:
+            new_sheet = drive_service.files().copy(
+                fileId=curr_sheet.id,
+                body=body,
+                supportsAllDrives=True
+            ).execute()
+        except Exception as e:
             embed.add_field(
                 name="Failed",
-                value=f"Invalid folder.  {e} Please check to see that you have the correct link and permissions.",
+                value=f"Invalid folder. {e} Please check to see that you have the correct link and permissions.",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
