@@ -4,7 +4,6 @@ import gspread
 import nextcord
 from nextcord.ext import commands
 from typing import Union
-from googleapiclient.discovery import build
 
 from utils import (
     discord_utils,
@@ -29,6 +28,7 @@ class DucklingCog(commands.Cog, name="Duck"):
         self.lock = asyncio.Lock()
         self.gdrive_credentials = google_utils.get_gdrive_credentials()
         self.gspread_client = google_utils.create_gspread_client()
+        self.drive_service = google_utils.create_google_drive_client()
 
     async def initoverview(self, ctx, hunturl, sheet):
         """Initializes the overview sheet for the hunt."""
@@ -282,15 +282,13 @@ class DucklingCog(commands.Cog, name="Duck"):
 
         new_sheet = ""
 
-        drive_service = build('drive', 'v3', credentials=self.gspread_client.auth)
-
         body = {
             'name': newname,
             'parents': [f_id]
         }
 
         try:
-            new_sheet = drive_service.files().copy(
+            new_sheet = self.drive_service.files().copy(
                 fileId=curr_sheet.id,
                 body=body,
                 supportsAllDrives=True

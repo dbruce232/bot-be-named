@@ -5,6 +5,8 @@ import os
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 
+from googleapiclient.discovery import build
+
 """
 Google utils. Used for any operations related to accessing the bot's Google accounts and credentials. 
 Used in any module that uses sheets (sheets, lion, hydra...)
@@ -22,6 +24,10 @@ JSON_PARAMS = [
     "auth_provider_x509_cert_url",
     "client_x509_cert_url",
 ]
+
+def create_google_drive_client():
+    creds = get_gdrive_credentials()
+    return build('drive', 'v3', credentials=creds)
 
 
 def create_gspread_client() -> gspread.Client:
