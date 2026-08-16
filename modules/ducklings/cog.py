@@ -9,6 +9,7 @@ from modules.archive.cog import ArchiveCog
 import nextcord
 from nextcord.ext import commands
 from typing import Union, cast
+import emoji
 
 from utils import (
     discord_utils,
@@ -58,7 +59,7 @@ class DucklingCog(commands.Cog, name="Duck"):
 
     async def createchannel(
         self, ctx, name: str, category_arg: Union[nextcord.CategoryChannel, str] = ""
-    ):
+    ) -> nextcord.TextChannel:
         """Command to create channel in a given category. If given no category name, it defaults to current category.
 
         Permission Category : Verified Roles only.
@@ -128,6 +129,7 @@ class DucklingCog(commands.Cog, name="Duck"):
                 value="Forbidden! Have you checked if the bot has the required permisisons?",
             )
         await discord_utils.send_message(ctx, embed)
+        return channel
 
     async def categorycreate(self, ctx, cat_name: str = ""):
         """Create a new category. 
@@ -145,12 +147,12 @@ class DucklingCog(commands.Cog, name="Duck"):
             )
             # reply to user
             await discord_utils.send_message(ctx, embed)
-            return
+            return None
         
         try:
             # create category
             await ctx.guild.create_category(cat_name)
-            await self.createchannel(ctx, "general", cat_name)
+            general_channel = await self.createchannel(ctx, "general", cat_name)
             await self.createchannel(ctx, "bot-spam", cat_name)
         except nextcord.Forbidden:
             embed.add_field(
@@ -160,13 +162,14 @@ class DucklingCog(commands.Cog, name="Duck"):
             )
             # reply to user
             await discord_utils.send_message(ctx, embed)
-            return
+            return None
         embed.add_field(
             name="Success",
             value=f"Created `{cat_name}`!",
             inline=False,
         )
         await discord_utils.send_message(ctx, embed)
+        return general_channel
 
     async def validate_template(self, ctx: commands.Context, proposed_sheet):
             embed = discord_utils.create_embed()
@@ -330,7 +333,7 @@ class DucklingCog(commands.Cog, name="Duck"):
             hunturl = ""
 
         try:
-            await self.categorycreate(ctx=ctx, cat_name=hunt_name)
+            general_channel = await self.categorycreate(ctx=ctx, cat_name=hunt_name)
             await ctx.guild.create_category(f"{hunt_name} Archive")
 
             cat = await discord_utils.find_category(ctx, hunt_name)
@@ -373,6 +376,51 @@ class DucklingCog(commands.Cog, name="Duck"):
                 inline=False,
             )
             await discord_utils.send_message(ctx, new_embed)
+            msg = None
+            try:
+                msg = await general_channel.send(embed=new_embed)
+            except nextcord.Forbidden:
+                embed.add_field(
+                    name="Failed",
+                    value=f"Cannot send messages in `# general` of category `{hunt_name}`!",
+                    inline=False,
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+
+            # Try to pin the message in new channel
+            embed_or_none = await discord_utils.pin_message(msg)
+            # Error pinning message
+            if embed_or_none is not None:
+                await general_channel.send(embed=embed_or_none)
+
+            await msg.add_reaction(emoji.emojize(":pushpin:"))
+
+            if hunturl != "":
+                embed = discord_utils.create_embed()
+                embed.add_field(
+                    name=f"Welcome to {hunt_name}!",
+                    value=hunturl,
+                    inline=False,
+                )
+                msg = await general_channel.send(embed=embed)
+                # Pin message in the new channel
+                embed_or_none = await discord_utils.pin_message(msg)
+
+                # Error pinning message
+                if embed_or_none is not None:
+                    await discord_utils.send_message(ctx, embed_or_none)
+                else:
+                    await msg.add_reaction(emoji.emojize(":pushpin:"))
+                    await general_channel.send(embed=new_embed)
+            else:
+                embed = discord_utils.create_embed()
+                embed.add_field(
+                    name=f"Welcome to {hunt_name}!",
+                    value="",
+                    inline=False,
+                )
+                msg = await general_channel.send(embed=embed)
         # If we can't open the sheet, send an error and return
         else:
             embed = discord_utils.create_embed()
