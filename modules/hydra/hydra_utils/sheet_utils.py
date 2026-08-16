@@ -36,7 +36,7 @@ async def create_puzzle_channel_from_template(
         return None, None, None
 
     tether_db_result, tether_type = findsheettether(
-        str(ctx.channel.category.id), str(ctx.channel.id)
+        ctx.channel.category.id, ctx.channel.id
     )
     if tether_db_result is None:
         embed.add_field(
@@ -462,7 +462,7 @@ async def batch_create_puzzle_channels(
     puzzle_configs: list[tuple[str, str | None]],
 ):
     """Batch creates multiple puzzle channels and tabs from template. Reserved for `chanhydra`."""
-    result, _ = findsheettether(str(ctx.channel.category.id), str(ctx.channel.id))
+    result, _ = findsheettether(ctx.channel.category.id, ctx.channel.id)
 
     if result is None:
         embed = discord_utils.create_embed()

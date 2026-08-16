@@ -264,7 +264,7 @@ class LionCog(commands.Cog, name="Lion"):
         """Helper to get overview sheet for bot stream notification. Silently returns None on failure."""
         try:
             result, _ = sheet_utils.findsheettether(
-                str(ctx.message.channel.category_id), str(ctx.message.channel.id)
+                ctx.message.channel.category_id, ctx.message.channel.id
             )
             if result is None:
                 return None
@@ -380,7 +380,7 @@ class LionCog(commands.Cog, name="Lion"):
 
     @command_predicates.is_solver()
     @commands.command(name="solvedlion", aliases=["solvedhydra"])
-    async def solvedlion(self, ctx: commands.Context, answer: str = None):
+    async def solvedlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to solved and updates the sheet and channel name accordingly.
 
         Permission Category : Solver Roles only.
@@ -390,11 +390,11 @@ class LionCog(commands.Cog, name="Lion"):
         await logging_utils.log_command(
             "solvedlion", ctx.guild, ctx.channel, str(ctx.author)
         )
-        await self.statuslion(ctx, "solved", answer)
+        await self.statuslion(ctx, "solved", " ".join(answer))
 
     @command_predicates.is_solver()
     @commands.command(name="backsolvedlion", aliases=["backlion", "backsolvedhydra"])
-    async def backsolvedlion(self, ctx: commands.Context, answer: str = None):
+    async def backsolvedlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to backsolved and updates the sheet and channel name accordingly.
 
         Permission Category : Solver Roles only.
@@ -405,11 +405,11 @@ class LionCog(commands.Cog, name="Lion"):
         await logging_utils.log_command(
             "backsolvedlion", ctx.guild, ctx.channel, str(ctx.author)
         )
-        await self.statuslion(ctx, "backsolved", answer)
+        await self.statuslion(ctx, "backsolved", " ".join(answer))
 
     @command_predicates.is_solver()
     @commands.command(name="solvedishlion", aliases=["solvedishhydra"])
-    async def solvedishlion(self, ctx: commands.Context, answer: str = None):
+    async def solvedishlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to solvedish and updates the sheet and channel name accordingly
 
         Permission Category : Solver Roles only.
@@ -420,11 +420,11 @@ class LionCog(commands.Cog, name="Lion"):
         await logging_utils.log_command(
             "solvedishlion", ctx.guild, ctx.channel, str(ctx.author)
         )
-        await self.statuslion(ctx, "solvedish", answer)
+        await self.statuslion(ctx, "solvedish", " ".join(answer))
 
     @command_predicates.is_solver()
     @commands.command(name="unsolvedlion", aliases=["unlion", "unsolvedhydra"])
-    async def unsolvedlion(self, ctx: commands.Context, answer: str = ""):
+    async def unsolvedlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to in progress and updates the sheet and channel name accordingly
 
         Permission Category : Solver Roles only.
@@ -436,7 +436,7 @@ class LionCog(commands.Cog, name="Lion"):
         await logging_utils.log_command(
             "unsolvedlion", ctx.guild, ctx.channel, str(ctx.author)
         )
-        await self.statuslion(ctx, "In Progress", answer)
+        await self.statuslion(ctx, "In Progress", " ".join(answer))
 
     @command_predicates.is_solver()
     @commands.command(
@@ -471,7 +471,7 @@ class LionCog(commands.Cog, name="Lion"):
 
             # Find tethered sheet
             result, _ = sheet_utils.findsheettether(
-                str(ctx.message.channel.category_id), str(ctx.message.channel.id)
+                ctx.message.channel.category_id, ctx.message.channel.id
             )
 
             if result is None:
@@ -505,7 +505,7 @@ class LionCog(commands.Cog, name="Lion"):
 
             batch_update_builder = batch_update_utils.BatchUpdateBuilder()
 
-            if answer is not None and status_info.get("update_ans"):
+            if answer is not None and len(answer) != 0 and status_info.get("update_ans"):
                 batch_update_builder.update_cell_by_label(
                     puzzle_tab.id, tab_ans_loc, answer.upper()
                 )
@@ -794,7 +794,7 @@ class LionCog(commands.Cog, name="Lion"):
 
     @command_predicates.is_solver()
     @commands.command(name="chanlion")
-    async def chanlion(self, ctx: commands.Context, chan_name: str, *args):
+    async def chanlion(self, ctx: commands.Context, *args):
         """Creates a new tab and a new channel for a new feeder puzzle and then updates the info in the sheet accordingly.
 
         Requires that the sheet has Overview and Template tabs
@@ -803,10 +803,16 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~chanlion "Puzzle Name"
         Usage: ~chanlion PuzzleName "http://www.linktopuzzle.com"
         """
+        if args[-1].startswith('http'):
+            chan_name = " ".join(args[:-1])
+            text_to_pin = args[-1]
+        else:
+            chan_name = " ".join(args)
+            text_to_pin = ""
+
         await logging_utils.log_command("chanlion", ctx.guild, ctx.channel, ctx.author)
 
         curr_sheet_link, newsheet, new_chan = None, None, None
-        text_to_pin = " ".join(args)
 
         curr_sheet_link, newsheet, new_chan = await sheet_utils.chancrabgeneric(
             self.gspread_client,

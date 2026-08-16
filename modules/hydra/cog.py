@@ -251,7 +251,7 @@ class HydraCog(commands.Cog, name="Hydra"):
             # Group all channels sharing the same tethered sheet. Now find the right cell
             for currchan in allchans:
                 result, _ = sheet_utils.findsheettether(
-                    str(currchan.category_id), str(currchan.id)
+                    currchan.category_id, currchan.id
                 )
                 if result is None:
                     continue  # Silently skip channels with no tether
@@ -596,7 +596,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         # Check that the target channel has a valid sheet tether
         result, _ = sheet_utils.findsheettether(
-            str(target_channel.category_id), str(target_channel.id)
+            target_channel.category_id, target_channel.id
         )
 
         if result is None:
@@ -1136,7 +1136,7 @@ class HydraCog(commands.Cog, name="Hydra"):
             for category in ctx.guild.categories:
                 if category.id == ctx.channel.category.id:
                     continue  # Skip current category
-                cat_result, _ = sheet_utils.findsheettether(str(category.id), None)
+                cat_result, _ = sheet_utils.findsheettether(category.id, None)
                 if (
                     cat_result is not None
                     and str(cat_result.sheet_link) == curr_sheet_link

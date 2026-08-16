@@ -1,9 +1,14 @@
 import os
 import asyncio
 import gspread
+import zipfile
+import constants
+from pathlib import Path
+from modules.archive import archive_utils, archive_constants
+from modules.archive.cog import ArchiveCog
 import nextcord
 from nextcord.ext import commands
-from typing import Union
+from typing import Union, cast
 
 from utils import (
     discord_utils,
@@ -28,7 +33,6 @@ class DucklingCog(commands.Cog, name="Duck"):
         self.lock = asyncio.Lock()
         self.gdrive_credentials = google_utils.get_gdrive_credentials()
         self.gspread_client = google_utils.create_gspread_client()
-        self.drive_service = google_utils.create_google_drive_client()
 
     async def initoverview(self, ctx, hunturl, sheet):
         """Initializes the overview sheet for the hunt."""
@@ -283,10 +287,9 @@ class DucklingCog(commands.Cog, name="Duck"):
         new_sheet = ""
 
         try:
-            new_sheet = self.drive_service.copy(
+            new_sheet = self.gspread_client.copy(
                 file_id=curr_sheet.id,
                 title=newname,
-                copy_permissions=True,
                 folder_id=f_id,
             )
         except Exception as e:
@@ -390,6 +393,429 @@ class DucklingCog(commands.Cog, name="Duck"):
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
+
+    def get_archive_channel(self, ctx: commands.Context):
+        for (category, channels) in ctx.guild.by_category():
+            for channel in channels:
+                if category is None and channel.name == "archive":
+                    return channel
+        return None
+
+    async def get_start_embed(self, channel_or_guild, multiple_channels=None):
+        owner = await self.bot.fetch_user(os.getenv("BOT_OWNER_DISCORD_ID"))
+        embed = discord_utils.create_embed()
+        embed.add_field(
+            name="Archive Started",
+            value=f"Your archiving of {channel_or_guild.mention if hasattr(channel_or_guild, 'mention') else channel_or_guild}"
+            f" has begun! This may take a while. If I run into "
+            f"any errors, I'll let you know.",
+            inline=False,
+        )
+        if multiple_channels:
+            embed.add_field(
+                name="List of Channels to Archive",
+                value=f"{chr(10).join([channel.name for channel in multiple_channels])}",
+                inline=False,
+            )
+        embed.add_field(
+            name="Problems?",
+            value=f"Taking too long? Let {owner.mention} know",
+            inline=False,
+        )
+        return embed
+
+    async def archive_one_channel(
+        self,
+        channel: Union[nextcord.TextChannel, nextcord.ForumChannel, nextcord.Thread],
+    ) -> Tuple[nextcord.File, int, nextcord.File, int]:
+        """Download a channel's history"""
+        # Write the chat log. Replace attachments with their filename (for easy reference)
+        text_log_path = os.path.join(
+            archive_constants.ARCHIVE,
+            channel.name + "_" + archive_constants.TEXT_LOG_PATH,
+        )
+        total_thread_txt_size = 0
+        with open(text_log_path, "w") as f:
+            if hasattr(channel, "history"):
+                channel = cast(nextcord.TextChannel | nextcord.Thread, channel)
+                async for msg in channel.history(limit=None, oldest_first=True):
+                    await ArchiveCog.archive_message(f, msg)
+                    # Threads are attached to normal messages
+                    if msg.flags.has_thread and msg.thread:
+                        total_thread_txt_size += await self.archive_thread(
+                            f, msg.thread
+                        )
+
+            elif channel.type == nextcord.ChannelType.forum:
+                channel = cast(nextcord.ForumChannel, channel)
+                for thread in channel.threads:
+                    total_thread_txt_size += await self.archive_thread(f, thread)
+                async for thread in channel.archived_threads(limit=None):
+                    total_thread_txt_size += await self.archive_thread(f, thread)
+
+            text_file_size = f.tell()
+
+        ZIP_FILENAME = os.path.join(
+            archive_constants.ARCHIVE, channel.name + "_archive.zip"
+        )
+        # Create a zipfile and then walk through all the saved chatlogs and images, and zip em up
+        with zipfile.ZipFile(ZIP_FILENAME, mode="w") as zf:
+            for root, directories, files in os.walk(archive_constants.ARCHIVE):
+                for filename in files:
+                    if filename == ZIP_FILENAME.split("/")[-1]:  # Don't include self
+                        continue
+                    zf.write(
+                        os.path.join(root, filename), compress_type=zipfile.ZIP_DEFLATED
+                    )
+            zf_file_size = zf.fp.tell()
+        return (
+            nextcord.File(ZIP_FILENAME),
+            zf_file_size,
+            nextcord.File(text_log_path),
+            text_file_size + total_thread_txt_size,
+        )
+
+    def get_file_and_embed(
+        self, channel, filesize_limit, zip_file, zip_file_size, textfile, textfile_size
+    ):
+        """Check if zipfile and textfile can be sent or not, create embed with message"""
+        embed = discord_utils.create_embed()
+
+        if zip_file_size > filesize_limit:
+            # Note that this is an underestimate, since it's not compressed! But it takes a fair amount of text to hit
+            # limits.
+            if textfile_size > filesize_limit:
+                embed.add_field(
+                    name="ERROR: History Too Big",
+                    value=f"Sorry about that! The chat log in {channel.mention} is too big for me to send.\n"
+                    f"The max file size I can send in this server is "
+                    f"`{(filesize_limit / constants.BYTES_TO_MEGABYTES):.2f}MB`, but the chat log is "
+                    f"`{(textfile_size / constants.BYTES_TO_MEGABYTES):.2f}MB`",
+                    inline=False,
+                )
+                file = None
+            else:
+                embed.add_field(
+                    name="WARNING: Attachments Too Big",
+                    value=f"There are too many photos in {channel.mention} for me to send. The max file size "
+                    f"I can send in this server is "
+                    f"`{(filesize_limit / constants.BYTES_TO_MEGABYTES):.2f}MB` but the zip is "
+                    f"`{(zip_file_size / constants.BYTES_TO_MEGABYTES):.2f}MB`. I'll only be able to send you the chat log.",
+                    inline=False,
+                )
+                ZIP_FILENAME = os.path.join(
+                    archive_constants.ARCHIVE, channel.name + "_archive.zip"
+                )
+                with zipfile.ZipFile(ZIP_FILENAME, mode="w") as zf:
+                    zf.write(
+                        os.path.join(
+                            archive_constants.ARCHIVE,
+                            channel.name + "_" + archive_constants.TEXT_LOG_PATH,
+                        ),
+                        compress_type=zipfile.ZIP_DEFLATED,
+                    )
+
+                    thread_dir = Path(
+                        archive_constants.ARCHIVE,
+                        f"{channel.name}_{archive_constants.THREADS}",
+                    )
+
+                    # Glob only succeeds if thread_dir exists
+                    for thread_file in thread_dir.glob("*.txt"):
+                        zf.write(thread_file, compress_type=zipfile.ZIP_DEFLATED)
+                file = zip_file
+        else:
+            file = zip_file
+            embed = None
+        return file, embed
+
+    async def archivecategory(self, ctx, category_name: str, archive_channel: nextcord.TextChannel):
+        """Command to download the history of every text channel in the category
+
+        Permission Category : Verified Roles only.
+        Usage: `~archivecategory "Category name"`
+        """
+        await logging_utils.log_command(
+            "archivecategory", ctx.guild, ctx.channel, ctx.author
+        )
+        embed = discord_utils.create_embed()
+
+        # Check if the user supplied a category
+        if len(category_name) < 1:
+            # No arguments provided
+            embed = discord_utils.create_no_argument_embed("category")
+            await archive_channel.send(embed=embed)
+            return
+
+        # If we don't have the lock, let the user know it may take a while.
+        msg = None
+        if self.lock.locked():
+            embed = archive_utils.get_delay_embed()
+            await archive_channel.send(embed=embed)
+        # LOCK EVERYTHING
+        async with self.lock:
+            if msg:
+                await msg.delete()
+                msg = None
+            category = await discord_utils.find_category(ctx, category_name)
+            if category is None:
+                embed.add_field(
+                    name="ERROR: Cannot find category",
+                    value=f"Sorry, I cannot find a category with name {category_name}. "
+                    f"Please make sure the spelling and capitalization are correct!",
+                    inline=False,
+                )
+                await archive_channel.send(embed=embed)
+                return
+
+            start_embed = await self.get_start_embed(category, category.text_channels)
+            msgs = await archive_channel.send(embed=start_embed)
+
+            for text_channel in category.text_channels:
+                archive_utils.reset_archive_dir()
+                try:
+                    (
+                        zip_file,
+                        zip_file_size,
+                        textfile,
+                        textfile_size,
+                    ) = await self.archive_one_channel(text_channel)
+                    file, embed = self.get_file_and_embed(
+                        text_channel,
+                        ctx.guild.filesize_limit * 0 + constants.HARDCODED_FILE_SIZE,
+                        zip_file,
+                        zip_file_size,
+                        textfile,
+                        textfile_size,
+                    )
+                    await archive_channel.send(file=file, embed=embed)
+                except nextcord.errors.Forbidden:
+                    embed.add_field(
+                        name="ERROR: No access",
+                        value=f"Sorry! I don't have access to {text_channel.mention}. You'll need "
+                        f"to give me permission to view the channel if you want "
+                        f"to archive it",
+                        inline=False,
+                    )
+                    await archive_channel.send(embed=embed)
+                    continue
+                # There has been an issue with AIO HTTP message sending fails, in which case discord.py crashes?
+                # So adding this try/catch for runtime to catch this. I don't think it's a deterministic error
+                except RuntimeError:
+                    embed = discord_utils.create_embed()
+                    embed.add_field(
+                        name="ERROR: Failed to send archive",
+                        value=f"Sorry! I had trouble sending you the archived file for "
+                        f"{text_channel.mention}. Perhaps you can try again with {ctx.prefix}archivechannel"
+                        f" after I've finished archiving {category.mention}.",
+                        inline=False,
+                    )
+                    await archive_channel.send(embed=embed)
+                    continue
+            if msgs:
+                await msgs.delete()
+            embed = discord_utils.create_embed()
+            embed.add_field(
+                name="All Done!",
+                value=f"Successfully archived {category_name}",
+                inline=False,
+            )
+            await archive_channel.send(embed=embed)
+        # Clean up the archive dir
+        archive_utils.reset_archive_dir()
+
+    async def deletecategory(self, ctx, archive_channel: nextcord.TextChannel, cat_name: str = ""):
+        """Delete a category in the server. Requires emoji confirmation
+
+        Permission Category : Server Moderators only.
+        Usage: `~deletecat "Cat A"` (List all the channels in the given category)
+        """
+        await logging_utils.log_command(
+            "deletecategory", ctx.guild, ctx.channel, ctx.author
+        )
+        embed = discord_utils.create_embed()
+
+        if cat_name == "":
+            embed.add_field(
+                name="Failed",
+                value="No category given",
+                inline=False,
+            )
+            # reply to user
+            await archive_channel.send(embed=embed)
+            return
+
+        # Return the channel names in a given category
+        category = await discord_utils.find_category(ctx, cat_name)
+
+        if category is None:
+            embed.add_field(
+                name="Failed",
+                value=f"Error! The category named `{cat_name}` not found.  Perhaps check your spelling and try again.",
+                inline=False,
+            )
+            # reply to user
+            await archive_channel.send(embed=embed)
+            return
+
+        channel_list = category.channels
+
+        channels = [f"#{chan.name}" for chan in channel_list]
+        if channels == []:
+            channels = ["(This Category is empty)"]
+
+        try:
+            for channel in channel_list:
+                await channel.delete()
+            await category.delete()
+            embed.add_field(
+                name="Success",
+                value=f"The category named `{category.name}` has been deleted!",
+                inline=False,
+            )
+            embed.add_field(
+                name="Channels deleted",
+                value=f"{chr(10).join(channels)}",
+                inline=False,
+            )
+        except:
+            embed.add_field(
+                name="Failed",
+                value=f"The category named `{category.name}` could not be deleted!",
+                inline=False,
+            )
+
+        finally:
+            await archive_channel.send(embed=embed)
+
+    async def confirm_ending(self, ctx: commands.Context, hunt_name: str):
+        embed = discord_utils.create_embed()
+
+        proceeding = False
+
+        confirm_emoji = "✅"
+        cancel_emoji = "❌"
+
+        # Send warning to user
+        embed.add_field(
+            name="Are you sure?",
+            value=f"This will end {hunt_name} by archiving and then deleting the categories `{hunt_name}` and `{hunt_name} Archive` and all of their channels. This is not reversible. You have 15 seconds to confirm.",
+        )
+
+        embs = await discord_utils.send_message(ctx, embed)
+        emb = embs[0]
+        await emb.add_reaction(confirm_emoji)
+        await emb.add_reaction(cancel_emoji)
+
+        # check that the reaction is the correct one and that the correct user reacted
+        def check_correct_react(reaction, user):
+            return (
+                reaction.message.id == emb.id
+                and (reaction.emoji == confirm_emoji or reaction.emoji == cancel_emoji)
+                and user == ctx.author
+            )
+
+        final_embed = discord_utils.create_embed()
+
+        try:
+            react, _ = await self.bot.wait_for(
+                event="reaction_add", check=check_correct_react, timeout=15
+            )
+            # delete category
+            if react.emoji == confirm_emoji:
+                proceeding = True
+                final_embed.add_field(
+                    name="Success",
+                    value=f"Proceeding...",
+                    inline=False,
+                )
+            else:
+                final_embed.add_field(
+                    name="Canceled",
+                    value="The operation was cancelled.",
+                    inline=False,
+                )
+
+        # CHANGE THIS BEHAVIOR IF BY DEFAULT WE WANT TO DELETE
+        except asyncio.TimeoutError:
+            final_embed.add_field(name="Canceled", value="The operation was cancelled.")
+        finally:
+            await discord_utils.send_message(ctx, final_embed)
+        return proceeding
+
+    @commands.command(name="endhunt")
+    async def endhunt(self, ctx: commands.Context, *args):
+        """Archives a hunt and its archive category and deletes them after successful archiving
+
+        
+        Usage: ~endhunt "Hunt Name"
+        Usage: ~endhunt Hunt Name
+        Usage: ~endhunt (if run in the hunt's category or archive category)
+        """
+        await logging_utils.log_command("endhunt", ctx.guild, ctx.channel, ctx.author)
+
+        embed = discord_utils.create_embed()
+
+        category = ctx.channel.category
+
+        if category is None and len(args) == 0:
+            embed.add_field(
+                name="Failed",
+                value=f"Please provide a hunt to archive",
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        if category is None:
+            hunt_name = " ".join(args)
+        elif category.name.endswith(" Archive"):
+            hunt_name = category.name[:-8]
+        else:
+            hunt_name = category.name
+
+        if await discord_utils.find_category(ctx=ctx, category_name=hunt_name) is None:
+            embed.add_field(
+                name="Failed",
+                value=f"Category {hunt_name} was not found! Please make sure the spelling and capitalization are correct!",
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        archive_channel = self.get_archive_channel(ctx)
+
+        if archive_channel is None:
+            embed.add_field(
+                name="Failed",
+                value=f"An Archive channel was not found! Please make sure to create an archive channel to archive to it",
+            )
+            # reply to user
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        proceeding = await self.confirm_ending(ctx=ctx, hunt_name=hunt_name)
+
+        if not proceeding:
+            return
+
+        await self.archivecategory(ctx=ctx, category_name=hunt_name, archive_channel=archive_channel)
+        await self.archivecategory(ctx=ctx, category_name=f"{hunt_name} Archive", archive_channel=archive_channel)
+
+        await self.deletecategory(ctx=ctx, archive_channel=archive_channel, cat_name=hunt_name)
+        await self.deletecategory(ctx=ctx, archive_channel=archive_channel, cat_name=f"{hunt_name} Archive")
+
+        final_embed = discord_utils.create_embed()
+
+        final_embed.add_field(
+            name="Success",
+            value=f"{hunt_name} has ended!",
+            inline=False,
+        )
+
+        await archive_channel.send(embed=final_embed)
+
+        return
 
 
 def setup(bot):

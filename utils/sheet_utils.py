@@ -308,7 +308,7 @@ async def sheetcreatetabgeneric(
     curr_sheet_link = None
     newsheet = None
 
-    tether_db_result, tether_type = findsheettether(str(curr_cat.id), str(curr_chan.id))
+    tether_db_result, tether_type = findsheettether(curr_cat.id, curr_chan.id)
 
     try:
         if tether_db_result is not None:

@@ -3,9 +3,8 @@ import os
 
 # import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.credentials import Credentials
 import json
-
-from googleapiclient.discovery import build
 
 """
 Google utils. Used for any operations related to accessing the bot's Google accounts and credentials. 
@@ -25,40 +24,39 @@ JSON_PARAMS = [
     "client_x509_cert_url",
 ]
 
-def create_google_drive_client():
-    return gspread.oauth(
-        credentials_filename="oauth_client_secret.json",
-    )
-
-
 def create_gspread_client() -> gspread.Client:
     """
     Create the client to be able to access google drive (sheets)
     """
-    creds = get_gdrive_credentials()
-    return gspread.authorize(creds)
+    # creds = get_gdrive_credentials()
+    # return gspread.authorize(creds)
+    return gspread.oauth(
+        credentials_filename='client_secret.json',
+        authorized_user_filename='token.json'
+    )
 
 
 def get_gdrive_credentials() -> ServiceAccountCredentials:
     """
     Get google drive credentials
     """
-    # Scope of what we can do in google drive
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    # # Scope of what we can do in google drive
+    # scopes = [
+    #     "https://www.googleapis.com/auth/spreadsheets",
+    #     "https://www.googleapis.com/auth/drive",
+    # ]
 
-    # Write the credentials file if we don't have it
-    if not os.path.exists("client_secret.json"):
-        json_creds = dict()
-        for param in JSON_PARAMS:
-            json_creds[param] = os.getenv(param).replace('"', "").replace("\\n", "\n")
-        with open("client_secret.json", "w") as f:
-            json.dump(json_creds, f)
-    creds = ServiceAccountCredentials.from_json_keyfile_name(
-        "client_secret.json", scopes
-    )
+    # # Write the credentials file if we don't have it
+    # if not os.path.exists("client_secret.json"):
+    #     json_creds = dict()
+    #     for param in JSON_PARAMS:
+    #         json_creds[param] = os.getenv(param).replace('"', "").replace("\\n", "\n")
+    #     with open("client_secret.json", "w") as f:
+    #         json.dump(json_creds, f)
+    # creds = ServiceAccountCredentials.from_json_keyfile_name(
+    #     "client_secret.json", scopes
+    # )
+    creds = Credentials.from_authorized_user_file('token.json')
     return creds
 
 
