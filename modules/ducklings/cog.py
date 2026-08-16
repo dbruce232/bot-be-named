@@ -412,7 +412,6 @@ class DucklingCog(commands.Cog, name="Duck"):
                     await discord_utils.send_message(ctx, embed_or_none)
                 else:
                     await msg.add_reaction(emoji.emojize(":pushpin:"))
-                    await general_channel.send(embed=new_embed)
             else:
                 embed = discord_utils.create_embed()
                 embed.add_field(
