@@ -636,7 +636,7 @@ class LionCog(commands.Cog, name="Lion"):
 
     @command_predicates.is_solver()
     @commands.command(name="metalion", aliases=["metachanlion", "metachanhydra"])
-    async def metalion(self, ctx: commands.Context, chan_name: str, *args):
+    async def metalion(self, ctx: commands.Context, *args):
         """Creates a new tab and a new channel for a new metapuzzle and then updates the info in the sheet accordingly.
 
         Requires that the sheet has Overview and Meta Template tabs
