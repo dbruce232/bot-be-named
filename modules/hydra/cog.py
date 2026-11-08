@@ -1249,7 +1249,7 @@ class HydraCog(commands.Cog, name="Hydra"):
                 return
 
         statuslion = self.bot.get_command("statuslion")
-        await statuslion(ctx, status, answer)
+        await statuslion(ctx, status, " ".join(answer))
 
         if is_solve and not was_solve:
             await self.post_solve_to_channel(
