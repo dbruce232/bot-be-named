@@ -1394,7 +1394,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         solvedhydra = self.bot.get_command("solvedhydra")
         mtahydra = self.bot.get_command("mtahydra")
 
-        await ctx.invoke(solvedhydra, answer=answer)
+        await ctx.invoke(solvedhydra, *answer)
         await ctx.invoke(mtahydra)
 
     @command_predicates.is_solver()
@@ -1410,7 +1410,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         backsolvedhydra = self.bot.get_command("backsolvedhydra")
         mtahydra = self.bot.get_command("mtahydra")
 
-        await ctx.invoke(backsolvedhydra, answer=answer)
+        await ctx.invoke(backsolvedhydra, *answer)
         await ctx.invoke(mtahydra)
 
     @command_predicates.is_solver()
