@@ -621,7 +621,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         # Parse all puzzle configurations
         puzzle_configs = []
-        lines = [line.strip() for line in re.split(r'[;,\n]+', content) if line.strip()]
+        lines = [line.strip() for line in re.split(r"[;,\n]+", content) if line.strip()]
 
         for line in lines:
             try:
@@ -638,8 +638,12 @@ class HydraCog(commands.Cog, name="Hydra"):
             if not parts:
                 continue
 
-            puzzle_name = " ".join(parts[:-1]) if parts[-1].startswith('http') else " ".join(parts)
-            puzzle_url = parts[-1] if parts[-1].startswith('http') else ""
+            puzzle_name = (
+                " ".join(parts[:-1])
+                if parts[-1].startswith("http")
+                else " ".join(parts)
+            )
+            puzzle_url = parts[-1] if parts[-1].startswith("http") else ""
             puzzle_configs.append((puzzle_name, puzzle_url, None))
 
         if not puzzle_configs:
@@ -1189,7 +1193,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="statushydra")
-    async def statushydra(self, ctx: commands.Context, status: str, answer: str = None):
+    async def statushydra(self, ctx: commands.Context, status: str, *answer):
         """Adds a status to the puzzle and updates the sheet and channel name accordingly.
         Same as `~statuslion`, but adds functionality for the timestamps on the Overview sheet:
 
@@ -1286,7 +1290,9 @@ class HydraCog(commands.Cog, name="Hydra"):
             else ctx.channel.mention
         )
 
-        if answer is None:
+        answer = " ".join(answer)
+
+        if answer == "":
             answer_col = overview_sheet.get_cell_value(
                 sheets_constants.ANSWER_COLUMN_LOCATION,
             )
@@ -1294,7 +1300,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         # Clean up answer formatting
         if answer:
-            clean_answer = answer.strip().replace("\n", " ").upper()
+            clean_answer = answer.strip().replace("\n", " ").replace(" ", "").upper()
             answer_display = f"||`{clean_answer}`||"
         else:
             answer_display = "*(no answer provided)*"
@@ -1329,7 +1335,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="solvedhydra")
-    async def solvedhydra(self, ctx: commands.Context, answer: str = None):
+    async def solvedhydra(self, ctx: commands.Context, *answer):
         """Sets the puzzle to solved and updates the sheet and channel name accordingly.
         Also records the solved time on the Overview sheet.
 
@@ -1341,7 +1347,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="backsolvedhydra")
-    async def backsolvedhydra(self, ctx: commands.Context, answer: str = None):
+    async def backsolvedhydra(self, ctx: commands.Context, *answer):
         """Sets the puzzle to backsolved and updates the sheet and channel name accordingly.
         Also records the solved time on the Overview sheet.
 
@@ -1353,7 +1359,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="solvedishhydra")
-    async def solvedishhydra(self, ctx: commands.Context, answer: str = None):
+    async def solvedishhydra(self, ctx: commands.Context, *answer):
         """Sets the puzzle to solvedish and updates the sheet and channel name accordingly.
         Records a new solved time on te Overview sheet.
 
@@ -1365,7 +1371,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="unsolvedhydra")
-    async def unsolvedhydra(self, ctx: commands.Context, answer: str = ""):
+    async def unsolvedhydra(self, ctx: commands.Context, *answer):
         """Sets the puzzle to in progress and updates the sheet and channel name accordingly.
         Clears the solved time on the Overview sheet.
 
