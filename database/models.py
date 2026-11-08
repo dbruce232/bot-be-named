@@ -9,7 +9,7 @@ if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
 
 print(uri)
-DATABASE_ENGINE = create_engine(uri, echo=False, future=True)
+DATABASE_ENGINE = create_engine(uri, echo=False, future=True, pool_size=10, max_overflow=20)
 Base = declarative_base()
 
 

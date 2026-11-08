@@ -8,8 +8,10 @@ from modules.archive import archive_utils, archive_constants
 from modules.archive.cog import ArchiveCog
 import nextcord
 from nextcord.ext import commands
-from typing import Union, cast
+from typing import TextIO, Tuple, Union, cast
 import emoji
+import re
+import unicodedata
 
 from utils import (
     discord_utils,
@@ -26,7 +28,7 @@ Duck module. Module with GSheet-Discord interfacing. See module's README.md for 
 
 class DucklingCog(commands.Cog, name="Duck"):
     """
-    Useful GSheet-Discord commands.
+    Original Commands from the Ducklings.
     """
 
     def __init__(self, bot):
@@ -471,6 +473,33 @@ class DucklingCog(commands.Cog, name="Duck"):
         )
         return embed
 
+    @staticmethod
+    async def archive_thread(f: TextIO, thread: nextcord.Thread) -> int:
+        thread_txt_size = 0
+        f.write(f"[  {thread.id} ] {'THREAD'.rjust(25, ' ')}: ")
+        f.write(thread.name + "\n")
+        thread_dir = os.path.join(
+            archive_constants.ARCHIVE,
+            f"{thread.parent.name}_{archive_constants.THREADS}",
+        )
+        # The thread "name" is by default the original message content. Slugify and truncate if necessary
+        norm_thread_name = (
+            unicodedata.normalize("NFKD", f"{thread.id}_{thread.name}")
+            .encode("ascii", "ignore")
+            .decode("ascii")
+        )
+        norm_thread_name = re.sub(r"[^\w\s-]", "", norm_thread_name.lower())
+        norm_thread_name = re.sub(r"[-\s]+", "-", norm_thread_name).strip("-_")
+        norm_thread_name = norm_thread_name[:250]
+        os.makedirs(thread_dir, exist_ok=True)
+        thread_log_path = os.path.join(thread_dir, norm_thread_name + ".txt")
+        with open(thread_log_path, "w") as thread_f:
+            async for t_msg in thread.history(limit=None, oldest_first=True):
+                await ArchiveCog.archive_message(thread_f, t_msg)
+            thread_txt_size += f.tell()
+
+        return thread_txt_size
+
     async def archive_one_channel(
         self,
         channel: Union[nextcord.TextChannel, nextcord.ForumChannel, nextcord.Thread],
@@ -814,7 +843,7 @@ class DucklingCog(commands.Cog, name="Duck"):
             await discord_utils.send_message(ctx, embed)
             return
 
-        if category is None:
+        if len(args) != 0:
             hunt_name = " ".join(args)
         elif category.name.endswith(" Archive"):
             hunt_name = category.name[:-8]

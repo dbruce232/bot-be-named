@@ -44,7 +44,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="roundhydra")
-    async def roundhydra(self, ctx: commands.Context, round_name: str = None):
+    async def roundhydra(self, ctx: commands.Context, *round_name):
         """Sets or updates the round information on the Overview sheet. Passing no argument retrieves the current round.
 
         Permission Category : Solver Roles only
@@ -65,8 +65,10 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         round_col = sheets_constants.ROUND_COLUMN
 
+        round_name = " ".join(round_name)
+
         try:
-            if round_name is None:
+            if round_name == "":
                 # If no arg passed, retrieve current round and tell user
                 current_round = overview_sheet.worksheet.acell(
                     round_col + str(row_to_find)
@@ -461,7 +463,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         # Parse all puzzle configurations
         puzzle_configs = []
-        lines = [line.strip() for line in content.split("\n") if line.strip()]
+        lines = [line.strip() for line in re.split(r'[;,\n]+', content) if line.strip()]
 
         for line in lines:
             try:
@@ -478,8 +480,8 @@ class HydraCog(commands.Cog, name="Hydra"):
             if not parts:
                 continue
 
-            puzzle_name = parts[0]
-            puzzle_url = parts[1] if len(parts) > 1 else ""
+            puzzle_name = " ".join(parts[:-1]) if parts[-1].startswith('http') else " ".join(parts)
+            puzzle_url = parts[-1] if parts[-1].startswith('http') else ""
             puzzle_configs.append((puzzle_name, puzzle_url))
 
         if not puzzle_configs:
@@ -1033,7 +1035,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="slainhydra", aliases=["donehydra"])
-    async def slainhydra(self, ctx, answer: str = None):
+    async def slainhydra(self, ctx, *answer):
         """Runs `~solvedhydra` "ANSWER" then `~mtahydra`.
 
         Permission Category : Solver Roles only.
@@ -1053,7 +1055,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="backslainhydra")
-    async def backslainhydra(self, ctx, answer: str = None):
+    async def backslainhydra(self, ctx, *answer):
         """Runs `~backsolvedhydra` "ANSWER" then `~mtahydra`.
 
         Permission Category : Solver Roles only.

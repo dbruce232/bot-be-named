@@ -507,7 +507,7 @@ class LionCog(commands.Cog, name="Lion"):
 
             if answer is not None and len(answer) != 0 and status_info.get("update_ans"):
                 batch_update_builder.update_cell_by_label(
-                    puzzle_tab.id, tab_ans_loc, answer.upper()
+                    puzzle_tab.id, tab_ans_loc, answer.replace(" ", "").upper()
                 )
             elif not status_info.get("update_ans"):
                 batch_update_builder.update_cell_by_label(
@@ -844,7 +844,12 @@ class LionCog(commands.Cog, name="Lion"):
         await logging_utils.log_command("metalion", ctx.guild, ctx.channel, ctx.author)
 
         curr_sheet_link, newsheet, new_chan = None, None, None
-        text_to_pin = " ".join(args)
+        if args[-1].startswith('http'):
+            chan_name = " ".join(args[:-1])
+            text_to_pin = args[-1]
+        else:
+            chan_name = " ".join(args)
+            text_to_pin = ""
 
         curr_sheet_link, newsheet, new_chan = await sheet_utils.chancrabgeneric(
             self.gspread_client,
