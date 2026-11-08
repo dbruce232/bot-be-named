@@ -5,7 +5,7 @@ import zoneinfo
 
 from modules.time import time_utils
 from nextcord.ext import commands
-from utils import logging_utils, discord_utils
+from utils import discord_utils
 
 """
 Time module. Code to get time and timezone from different locations, convert timezones and similar.
@@ -23,7 +23,7 @@ class TimeCog(commands.Cog, name="Time"):
         self.geopy_client = geopy.geocoders.GeoNames(os.getenv("GEOPY_USERNAME"))
 
     @commands.command(name="countdown")
-    async def countdown(self, ctx, *args):
+    async def countdown(self, ctx: commands.Context, *args):
         """Uses discord message time formatting to provide a countdown
 
         Usage: `~countdown September 22, 2021 9:00pm EDT`
@@ -31,7 +31,6 @@ class TimeCog(commands.Cog, name="Time"):
 
         See https://github.com/scrapinghub/dateparser/tree/master for a more comprehensive list of supported formats.
         """
-        await logging_utils.log_command("countdown", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if len(args) < 1:
@@ -62,7 +61,7 @@ class TimeCog(commands.Cog, name="Time"):
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="time")
-    async def time(self, ctx, *args):
+    async def time(self, ctx: commands.Context, *args):
         """Return the time in the specified location
 
         Usage: `~time Mumbai`
@@ -71,7 +70,6 @@ class TimeCog(commands.Cog, name="Time"):
         Usage: `~time Boston, Massachusetts, USA`
         Usage: `~time Tokyo, Japan`
         """
-        await logging_utils.log_command("time", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         # No location provided

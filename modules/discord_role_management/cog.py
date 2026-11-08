@@ -1,7 +1,7 @@
 import nextcord
 from nextcord.ext import commands
 from typing import Union
-from utils import discord_utils, logging_utils, command_predicates
+from utils import discord_utils, command_predicates
 
 """
 Discord Role management module. Bundle of all discord functions and commands related to managing roles in any discord guild.
@@ -24,7 +24,7 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
     @commands.command(name="assignrole", aliases=["makerole", "createrole", "addrole"])
     async def assignrole(
         self,
-        ctx,
+        ctx: commands.Context,
         rolename: Union[nextcord.Role, nextcord.Member, str],
         *args: Union[nextcord.Member, str],
     ):
@@ -41,9 +41,6 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
         Usage: `~assignrole "NewRoleName" @User1`
         Usage: `~assignrole "NewRolename"` (if no users given, just creates the role)
         """
-        await logging_utils.log_command(
-            "assignrole", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if isinstance(rolename, nextcord.Member):
@@ -157,7 +154,7 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
     @commands.command(name="unassignrole", aliases=["removerole"])
     async def unassignrole(
         self,
-        ctx,
+        ctx: commands.Context,
         rolename: Union[nextcord.Role, str],
         *args: Union[nextcord.Member, str],
     ):
@@ -170,9 +167,6 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
         Usage: `~unassignrole @RoleName here (Everyone who can see this channel, including BBN)`
         Usage: `~unassignrole "RoleName" "User 1"`
         """
-        await logging_utils.log_command(
-            "unassignrole", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         role_to_unassign = await discord_utils.find_role(ctx, rolename)
@@ -270,7 +264,7 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
     @commands.command(name="clonerole", aliases=["syncrole"])
     async def clonerole(
         self,
-        ctx,
+        ctx: commands.Context,
         oldrole: Union[nextcord.Role, str],
         newrole: Union[nextcord.Role, str],
     ):
@@ -286,7 +280,6 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
         Usage: `~clonerole @RoleName "NewRoleName"`
         Usage: `~clonerole @RoleName @RoleName2`
         """
-        await logging_utils.log_command("clonerole", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         oldrole_as_role = await discord_utils.find_role(ctx, oldrole)
@@ -350,16 +343,15 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
 
     @command_predicates.is_bot_owner_or_admin()
     @commands.command(name="deleterole")
-    async def deleterole(self, ctx, rolename: Union[nextcord.Role, str]):
+    async def deleterole(
+        self, ctx: commands.Context, rolename: Union[nextcord.Role, str]
+    ):
         """Delete a role from the server
 
         Permission Category : Admin or Bot Owner only.
         Usage: `~deleterole "RoleName"`
         Usage: `~deleterole @RoleMention`
         """
-        await logging_utils.log_command(
-            "deleterole", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         role_to_delete = await discord_utils.find_role(ctx, rolename)
@@ -394,13 +386,14 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
             return
 
     @commands.command(name="listroles", aliases=["lsroles", "listrole", "lsrole"])
-    async def listroles(self, ctx, rolename: Union[nextcord.Role, str] = ""):
+    async def listroles(
+        self, ctx: commands.Context, rolename: Union[nextcord.Role, str] = ""
+    ):
         """List all roles in the server, or all users under a given role.
 
         Usage:`~listroles` (All roles in the server)
         Usage:`~listrole @RoleName` (List all users with role @RoleName)
         """
-        await logging_utils.log_command("listroles", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if rolename == "":
@@ -436,18 +429,86 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
             value=allusers,
             inline=False,
         )
+        if len(role_to_list.members) > 0:
+            usernames = " ".join([f"@{user.name}" for user in role_to_list.members])
+            embed.add_field(
+                name="Usernames",
+                value=f"```{usernames}```",
+                inline=False,
+            )
+        await discord_utils.send_message(ctx, embed)
+
+    @commands.command(name="subtractrole", aliases=["subrole"])
+    async def subtractrole(
+        self,
+        ctx: commands.Context,
+        rolename: Union[nextcord.Role, str],
+        *args: Union[nextcord.Role, nextcord.Member, str],
+    ):
+        """Lists all the users in a role, but removes those in subsequent roles, or given users.
+
+        Usage: `~subtractrole @role_a @role_b @role_c` (Those in @role_a but not in @role_b or @role_c)
+        Usage: `~subtractrole @role_a @user_a` (those in @role_a but who aren't @user_a)
+        """
+        embed = discord_utils.create_embed()
+
+        role_to_list = await discord_utils.find_role(ctx, rolename)
+
+        if role_to_list is None:
+            embed.add_field(
+                name="Failed",
+                value=f"I can't find `{rolename}` in this server. Make sure you check the spelling and punctuation!",
+                inline=False,
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        members_to_remove = set()
+        for name in args:
+            if isinstance(name, nextcord.Member):
+                members_to_remove.add(name)
+                continue
+            role = await discord_utils.find_role(ctx, name)
+            if role is not None:
+                members_to_remove.update(role.members)
+                continue
+            user = await discord_utils.find_user(ctx, name)
+            if user is not None:
+                members_to_remove.add(user)
+                continue
+            embed.add_field(
+                name="Error Finding Role or Member!",
+                value=f"Could not find role or member `{name}`. Perhaps check your spelling or try mentioning the role/user instead.",
+                inline=False,
+            )
+
+        members = [
+            user for user in role_to_list.members if user not in members_to_remove
+        ]
+
+        allusers = f"{', '.join([user.mention for user in members])}"
+
+        if allusers == "":
+            allusers = "(No members left)"
+        embed.add_field(
+            name=f"Members in {role_to_list} after subtracting necessary roles/members = {len(members)}",
+            value=allusers,
+            inline=False,
+        )
+        if len(members) > 0:
+            usernames = " ".join([f"@{user.name}" for user in members])
+            embed.add_field(name="Usernames", value=f"```{usernames}```", inline=False)
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="unreactrole", aliases=[])
-    async def unreactrole(self, ctx, *args: Union[nextcord.Role, str]):
+    async def unreactrole(
+        self, ctx: commands.Context, *args: Union[nextcord.Role, str]
+    ):
         """List all people for a given role who have not reacted to a message. (Either reply to the message, or it takes the message above)
 
         Usage:(as reply to message) `~unreactrole here` (Everyone who can see this channel, including BBN)
         Usage:(to just consider the last message) `~unreactrole @RoleA "RoleB"`
         """
-        await logging_utils.log_command(
-            "unreactrole", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         members = []
@@ -478,14 +539,16 @@ class DiscordRoleManagementCog(commands.Cog, name="Discord Role Management"):
             return
 
         if not ctx.message.reference:
-            channel_history = await ctx.message.channel.history(limit=2).flatten()
+            channel_history = [
+                message async for message in ctx.message.channel.history(limit=2)
+            ]
             message = channel_history[-1]
         else:
             message = await ctx.fetch_message(ctx.message.reference.message_id)
 
         reactors = []
         for react in message.reactions:
-            users = await react.users().flatten()
+            users = [user async for user in react.users()]
             reactors = reactors + users
 
         reactors = list(set(reactors))

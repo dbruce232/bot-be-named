@@ -4,7 +4,7 @@ import urllib
 import re
 from utils.paging_utils import Pages
 from nextcord.ext import commands
-from utils import discord_utils, logging_utils
+from utils import discord_utils
 from modules.lookup import lookup_constants, lookup_utils
 
 """
@@ -21,13 +21,12 @@ class LookupCog(commands.Cog, name="Lookup"):
         self.bot = bot
 
     @commands.command(name="search")
-    async def search(self, ctx, target_site: str, *args):
+    async def search(self, ctx: commands.Context, target_site: str, *args):
         """
         Command to search the interwebs! (google)
 
         Usage: `~search <target_site> <[query...]>`
         """
-        await logging_utils.log_command("search", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if len(args) < 1:
@@ -87,13 +86,12 @@ class LookupCog(commands.Cog, name="Lookup"):
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="google")
-    async def google(self, ctx, *args):
+    async def google(self, ctx: commands.Context, *args):
         """
         Command to search google!
 
         Usage: `~google <[query...]>`
         """
-        await logging_utils.log_command("google", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         results = lookup_utils.search_query(" ".join(args))
@@ -104,13 +102,12 @@ class LookupCog(commands.Cog, name="Lookup"):
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="wikipedia", aliases=["wiki"])
-    async def wikipedia(self, ctx, *args):
+    async def wikipedia(self, ctx: commands.Context, *args):
         """
         Command to search Wikipedia!
 
         Usage: `~wikipedia <[query...]>`
         """
-        await logging_utils.log_command("wikipedia", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         results = lookup_utils.search_query(
@@ -132,7 +129,7 @@ class LookupCog(commands.Cog, name="Lookup"):
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="nutrimatic", aliases=["n", "nu", "nut", "nutri"])
-    async def nutrimatic(self, ctx, *, query=None):
+    async def nutrimatic(self, ctx: commands.Context, *, query=None):
         if not query:
             await ctx.send('Example regex: `!nut "<asympote_>"`')
             return

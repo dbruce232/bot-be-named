@@ -10,11 +10,12 @@ from utils import (
     command_predicates,
     discord_utils,
     google_utils,
-    logging_utils,
     sheet_utils,
     sheets_constants,
     solved_utils,
 )
+from modules.hydra.hydra_utils import sheet_utils as hydra_sheet_utils
+from modules.hydra.hydra_utils.sheet_command_base import SheetCommandBase
 
 """
 Lion module. Module with GSheet-Discord interfacing. See module's README.md for more.
@@ -83,7 +84,7 @@ class LionCog(commands.Cog, name="Lion"):
 
     @command_predicates.is_solver()
     @commands.command(name="unsolved", aliases=["unsolvedcrab"])
-    async def unsolved(self, ctx: commands.context):
+    async def unsolved(self, ctx: commands.Context):
         """removes one of the solved prefixes from channel name
 
         Permission Category : Solver Roles only.
@@ -91,8 +92,6 @@ class LionCog(commands.Cog, name="Lion"):
 
         Note that if you use more than 2 channel renaming commands quickly, Discord automatically stops any more channel-name changes for 10 more minutes. Those channels will have to be renamed manually, or wait for the full 10 mins.
         """
-        # log command in console
-        await logging_utils.log_command("unsolved", ctx.guild, ctx.channel, ctx.author)
         embed = await solved_utils.status_remove(ctx)
         await discord_utils.send_message(ctx, embed)
 
@@ -100,23 +99,23 @@ class LionCog(commands.Cog, name="Lion"):
         embed = discord_utils.create_embed()
         # Handling if mta is called from a thread
         if await discord_utils.is_thread(ctx, ctx.channel):
-            # Checking if thread can be archived by the bot
-            try:
-                await ctx.channel.edit(archived=True)
-            except nextcord.Forbidden:
-                embed.add_field(
-                    name="Failed",
-                    value="Forbidden! Have you checked if the bot has the required permisisons?",
-                )
-                await discord_utils.send_message(ctx, embed)
-                return
             embed.add_field(
                 name="Success",
                 value=f"Archived {ctx.channel.mention} thread",
                 inline=False,
             )
-            await ctx.channel.edit(archived=True)
+            # Send before archiving, as a new message unarchives the thread
             await discord_utils.send_message(ctx, embed)
+            # Checking if thread can be archived by the bot
+            try:
+                await ctx.channel.edit(archived=True)
+            except nextcord.Forbidden:
+                embed = discord_utils.create_embed()
+                embed.add_field(
+                    name="Failed",
+                    value="Forbidden! Have you checked if the bot has the required permissions?",
+                )
+                await discord_utils.send_message(ctx, embed)
             return
 
         # Otherwise mta is called from a regular channel
@@ -213,117 +212,11 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: `~mta`
         Usage: `~movetoarchive archive_category_name`
         """
-        await logging_utils.log_command(
-            "movetoarchive", ctx.guild, ctx.channel, ctx.author
-        )
         await self.movetoarchive_generic(ctx, archive_name)
 
     ########################
     # LION STATUS COMMANDS #
     ########################
-
-    async def get_overview(
-        self, ctx: commands.Context, sheet_link: str
-    ) -> sheet_utils.OverviewSheet | None:
-        try:
-            overview_sheet = sheet_utils.OverviewSheet(self.gspread_client, sheet_link)
-
-        # Error when we can't open the curr sheet link
-        except gspread.exceptions.APIError as e:
-            error_json = e.response.json()
-            error_status = error_json.get("error", {}).get("status")
-            if error_status == "PERMISSION_DENIED":
-                embed = discord_utils.create_embed()
-                embed.add_field(
-                    name="Failed",
-                    value=f"I'm unable to open the tethered [sheet]({sheet_link}). "
-                    f"Did the permissions change?",
-                    inline=False,
-                )
-                await discord_utils.send_message(ctx, embed)
-                return None
-            else:
-                raise e
-        # Error when the sheet has no template tab
-        except gspread.exceptions.WorksheetNotFound:
-            embed = discord_utils.create_embed()
-            embed.add_field(
-                name="Failed",
-                value=f"The [sheet]({sheet_link}) has no tab named 'Overview'. "
-                f"Did you forget to add one?",
-                inline=False,
-            )
-            await discord_utils.send_message(ctx, embed)
-            return None
-
-        return overview_sheet
-
-    async def _get_overview_for_notification(
-        self, ctx: commands.Context
-    ) -> sheet_utils.OverviewSheet | None:
-        """Helper to get overview sheet for bot stream notification. Silently returns None on failure."""
-        try:
-            result, _ = sheet_utils.findsheettether(
-                ctx.message.channel.category_id, ctx.message.channel.id
-            )
-            if result is None:
-                return None
-            curr_sheet_link = str(result.sheet_link)
-            return sheet_utils.OverviewSheet(self.gspread_client, curr_sheet_link)
-        except Exception:
-            return None
-
-    async def findchanidcell(self, ctx: commands.Context, sheet_link):
-        """Find the cell with the discord channel id based on lion overview"""
-        curr_chan_id = ctx.channel.id
-        curr_sheet = None
-        overview = None
-        try:
-            curr_sheet = self.gspread_client.open_by_url(sheet_link)
-            overview = curr_sheet.worksheet("Overview")
-        # Error when we can't open the curr sheet link
-        except gspread.exceptions.APIError as e:
-            error_json = e.response.json()
-            error_status = error_json.get("error", {}).get("status")
-            if error_status == "PERMISSION_DENIED":
-                embed = discord_utils.create_embed()
-                embed.add_field(
-                    name="Failed",
-                    value=f"I'm unable to open the tethered [sheet]({sheet_link}). "
-                    f"Did the permissions change?",
-                    inline=False,
-                )
-                await discord_utils.send_message(ctx, embed)
-                return
-            else:
-                raise e
-        # Error when the sheet has no template tab
-        except gspread.exceptions.WorksheetNotFound:
-            embed = discord_utils.create_embed()
-            embed.add_field(
-                name="Failed",
-                value=f"The [sheet]({sheet_link}) has no tab named 'Overview'. "
-                f"Did you forget to add one?",
-                inline=False,
-            )
-            await discord_utils.send_message(ctx, embed)
-            return
-
-        curr_chan_or_cat_cell = None
-        # Search first column for the channel
-        curr_chan_or_cat_cell = overview.find(str(curr_chan_id), in_column=1)
-        if curr_chan_or_cat_cell is None:
-            # If there is no tether for the specific channel, check if there is one for the category.
-            embed = discord_utils.create_embed()
-            embed.add_field(
-                name="Failed",
-                value=f"I couldn't find the channel {ctx.channel.mention} in the sheet."
-                f" Are you sure this channel is linked to a puzzle?",
-                inline=False,
-            )
-            await discord_utils.send_message(ctx, embed)
-
-        return curr_chan_or_cat_cell, overview
 
     @command_predicates.is_solver()
     @commands.command(name="gettablion", aliases=["tablion", "gettab"])
@@ -336,32 +229,9 @@ class LionCog(commands.Cog, name="Lion"):
 
         Usage: ~gettablion
         """
-        await logging_utils.log_command(
-            "gettablion", ctx.guild, ctx.channel, ctx.author
-        )
-        result, _ = sheet_utils.findsheettether(
-            ctx.message.channel.category_id, ctx.message.channel.id
-        )
-
-        if result is None:
-            embed = discord_utils.create_embed()
-            embed.add_field(
-                name="Failed",
-                value=f"Neither the category **{ctx.message.channel.category.name}** nor the channel {ctx.message.channel.mention} "
-                f"are tethered to any Google sheet.",
-                inline=False,
-            )
-            await discord_utils.send_message(ctx, embed)
-            return
-
-        curr_sheet_link = str(result.sheet_link)
-        overview_sheet = await self.get_overview(ctx, curr_sheet_link)
+        base = SheetCommandBase(ctx, self.gspread_client)
+        curr_sheet_link, overview_sheet, row_to_find = await base.get_sheet_context()
         if overview_sheet is None:
-            return
-
-        row_to_find, err_embed = overview_sheet.find_row_of_channel(ctx)
-        if err_embed is not None:
-            await discord_utils.send_message(ctx, err_embed)
             return
 
         tab_cell_label = sheets_constants.SHEET_TAB_ID_COLUMN + str(row_to_find)
@@ -379,7 +249,7 @@ class LionCog(commands.Cog, name="Lion"):
         await discord_utils.send_message(ctx, embed)
 
     @command_predicates.is_solver()
-    @commands.command(name="solvedlion", aliases=["solvedhydra"])
+    @commands.command(name="solvedlion")
     async def solvedlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to solved and updates the sheet and channel name accordingly.
 
@@ -387,13 +257,10 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~solvedlion
         Usage: ~solvedlion "answer"
         """
-        await logging_utils.log_command(
-            "solvedlion", ctx.guild, ctx.channel, str(ctx.author)
-        )
         await self.statuslion(ctx, "solved", " ".join(answer))
 
     @command_predicates.is_solver()
-    @commands.command(name="backsolvedlion", aliases=["backlion", "backsolvedhydra"])
+    @commands.command(name="backsolvedlion", aliases=["backlion"])
     async def backsolvedlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to backsolved and updates the sheet and channel name accordingly.
 
@@ -402,13 +269,10 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~backsolvedlion
         Usage: ~backsolvedlion "answer"
         """
-        await logging_utils.log_command(
-            "backsolvedlion", ctx.guild, ctx.channel, str(ctx.author)
-        )
         await self.statuslion(ctx, "backsolved", " ".join(answer))
 
     @command_predicates.is_solver()
-    @commands.command(name="solvedishlion", aliases=["solvedishhydra"])
+    @commands.command(name="solvedishlion")
     async def solvedishlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to solvedish and updates the sheet and channel name accordingly
 
@@ -417,13 +281,10 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~solvedishlion
         Usage: ~solvedishlion "answer"
         """
-        await logging_utils.log_command(
-            "solvedishlion", ctx.guild, ctx.channel, str(ctx.author)
-        )
         await self.statuslion(ctx, "solvedish", " ".join(answer))
 
     @command_predicates.is_solver()
-    @commands.command(name="unsolvedlion", aliases=["unlion", "unsolvedhydra"])
+    @commands.command(name="unsolvedlion", aliases=["unlion"])
     async def unsolvedlion(self, ctx: commands.Context, *answer):
         """Sets the puzzle to in progress and updates the sheet and channel name accordingly
 
@@ -433,15 +294,10 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~unsolvedlion "answer" (Updates the answer from the sheet to "answer")
 
         """
-        await logging_utils.log_command(
-            "unsolvedlion", ctx.guild, ctx.channel, str(ctx.author)
-        )
         await self.statuslion(ctx, "In Progress", " ".join(answer))
 
     @command_predicates.is_solver()
-    @commands.command(
-        name="statuslion", aliases=["statlion", "stat", "puzzstatus", "statushydra"]
-    )
+    @commands.command(name="statuslion", aliases=["statlion", "stat", "puzzstatus"])
     async def statuslion(self, ctx: commands.Context, status: str, answer: str = None):
         """Adds a status to the puzzle and updates the sheet and channel name accordingly
 
@@ -457,9 +313,7 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~statuslion solved "answer"
         Usage: ~statuslion "custom-update-string" "answer"
         """
-        status = status.capitalize()
-        if status == "In progress":
-            status = "In Progress"
+        status = sheet_utils.normalize_status(status)
         embed = discord_utils.create_embed()
 
         try:
@@ -470,28 +324,10 @@ class LionCog(commands.Cog, name="Lion"):
                 status_info = sheets_constants.status_dict.get("None")
 
             # Find tethered sheet
-            result, _ = sheet_utils.findsheettether(
-                ctx.message.channel.category_id, ctx.message.channel.id
-            )
+            base = SheetCommandBase(ctx, self.gspread_client)
+            _, overview_sheet, row_to_find = await base.get_sheet_context()
 
-            if result is None:
-                embed.add_field(
-                    name="Failed",
-                    value=f"Neither the category **{ctx.message.channel.category.name}** nor the channel {ctx.message.channel.mention} "
-                    f"are tethered to any Google sheet.",
-                    inline=False,
-                )
-                await discord_utils.send_message(ctx, embed)
-                return
-
-            curr_sheet_link = str(result.sheet_link)
-            overview_sheet = await self.get_overview(ctx, curr_sheet_link)
             if overview_sheet is None:
-                return
-
-            row_to_find, err_embed = overview_sheet.find_row_of_channel(ctx)
-            if err_embed is not None:
-                await discord_utils.send_message(ctx, err_embed)
                 return
 
             status_col = overview_sheet.get_cell_value(
@@ -553,7 +389,13 @@ class LionCog(commands.Cog, name="Lion"):
             past_prefix = curr_stat_info.get("prefix")
 
             if status == curr_status:
+                embed.add_field(
+                    name="Note",
+                    value=f"The puzzle status was already set to `{status}`. No changes were made.",
+                    inline=False,
+                )
                 await ctx.message.add_reaction(emoji.emojize(":check_mark_button:"))
+                await discord_utils.send_message(ctx, embed)
                 return
 
             if add_prefix:
@@ -584,34 +426,10 @@ class LionCog(commands.Cog, name="Lion"):
     async def sheetmta_generic(self, ctx: commands.Context):
         """Just handles the sheet aspect of mtalion, moving the tab associated with ctx.channel to the end of the sheet"""
         embed = discord_utils.create_embed()
-        result, _ = sheet_utils.findsheettether(
-            ctx.message.channel.category_id, ctx.message.channel.id
-        )
+        base = SheetCommandBase(ctx, self.gspread_client)
+        _, overview_sheet, row_to_find = await base.get_sheet_context()
 
-        if result is None:
-            embed.add_field(
-                name="Failed",
-                value=f"Neither the category **{ctx.message.channel.category.name}** nor the channel {ctx.message.channel.mention} "
-                f"are tethered to any Google sheet.",
-                inline=False,
-            )
-            await discord_utils.send_message(ctx, embed)
-            return
-
-        curr_sheet_link = str(result.sheet_link)
-        overview_sheet = await self.get_overview(ctx, curr_sheet_link)
         if overview_sheet is None:
-            embed.add_field(
-                name="Failed",
-                value="Error! Overview tab not found in the sheet! Did you accidentally delete it?",
-                inline=False,
-            )
-            await discord_utils.send_message(ctx, embed)
-            return
-
-        row_to_find, err_embed = overview_sheet.find_row_of_channel(ctx)
-        if err_embed is not None:
-            await discord_utils.send_message(ctx, err_embed)
             return
 
         sheet_tab_id_col = sheets_constants.SHEET_TAB_ID_COLUMN
@@ -671,9 +489,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: `~mtalion`
         Usage: `~mtalion archive_category_name`
         """
-        await logging_utils.log_command(
-            "mtalion", ctx.guild, ctx.channel, str(ctx.author)
-        )
         await self.sheetmta_generic(ctx)  # Attempt to move sheet stuff
         await self.movetoarchive_generic(
             ctx, archive_name
@@ -693,18 +508,9 @@ class LionCog(commands.Cog, name="Lion"):
             tab_name = chan_name.replace("#", "").replace("-", " ")
 
             sheet = self.gspread_client.open_by_url(curr_sheet_link)
-            try:
-                overview_sheet = await self.get_overview(ctx, curr_sheet_link)
-            # Error when the sheet has no Overview tab
-            except gspread.exceptions.WorksheetNotFound:
-                embed.add_field(
-                    name="Failed",
-                    value=f"The [sheet]({curr_sheet_link}) has no tab named 'Overview'. "
-                    f"Did you forget to add one?",
-                    inline=False,
-                )
-                await discord_utils.send_message(ctx, embed)
-                return
+            overview_sheet = await hydra_sheet_utils.get_overview(
+                self.gspread_client, ctx, curr_sheet_link
+            )
 
             if not overview_sheet:
                 return
@@ -810,8 +616,6 @@ class LionCog(commands.Cog, name="Lion"):
             chan_name = " ".join(args)
             text_to_pin = ""
 
-        await logging_utils.log_command("chanlion", ctx.guild, ctx.channel, ctx.author)
-
         curr_sheet_link, newsheet, new_chan = None, None, None
 
         curr_sheet_link, newsheet, new_chan = await sheet_utils.chancrabgeneric(
@@ -841,8 +645,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~metalion PuzzleName
         Usage: ~metalion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command("metalion", ctx.guild, ctx.channel, ctx.author)
-
         curr_sheet_link, newsheet, new_chan = None, None, None
         if args[-1].startswith('http'):
             chan_name = " ".join(args[:-1])
@@ -878,10 +680,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~threadlion PuzzleName
         Usage: ~threadlion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command(
-            "threadlion", ctx.guild, ctx.channel, ctx.author
-        )
-
         curr_sheet_link, newsheet, new_chan = None, None, None
         text_to_pin = " ".join(args)
 
@@ -912,10 +710,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~metathreadlion PuzzleName
         Usage: ~metathreadlion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command(
-            "metathreadlion", ctx.guild, ctx.channel, ctx.author
-        )
-
         curr_sheet_link, newsheet, new_chan = None, None, None
         text_to_pin = " ".join(args)
 
@@ -946,8 +740,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~forumlion PuzzleName
         Usage: ~forumlion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command("forumlion", ctx.guild, ctx.channel, ctx.author)
-
         curr_sheet_link, newsheet, new_chan = None, None, None
         text_to_pin = " ".join(args)
 
@@ -978,10 +770,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~metaforumlion PuzzleName
         Usage: ~metaforumlion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command(
-            "metaforumlion", ctx.guild, ctx.channel, ctx.author
-        )
-
         curr_sheet_link, newsheet, new_chan = None, None, None
         text_to_pin = " ".join(args)
 
@@ -1012,8 +800,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~sheetlion PuzzleName
         Usage: ~sheetlion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command("sheetlion", ctx.guild, ctx.channel, ctx.author)
-
         curr_sheet_link, newsheet = await sheet_utils.sheetcrabgeneric(
             self.gspread_client, ctx, tab_name, False
         )
@@ -1039,10 +825,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~metasheetlion PuzzleName
         Usage: ~metasheetlion PuzzleName linktopuzzle
         """
-        await logging_utils.log_command(
-            "metasheetlion", ctx.guild, ctx.channel, ctx.author
-        )
-
         curr_sheet_link, newsheet = None, None
 
         curr_sheet_link, newsheet = await sheet_utils.sheetcrabgeneric(
@@ -1182,10 +964,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~huntlion SheetName hunturl role folderurl
         Usage: ~huntlion SheetName hunturl folderurl
         """
-        await logging_utils.log_command(
-            "huntlion", ctx.guild, ctx.channel, str(ctx.author)
-        )
-
         f_url = folderurl
         roleName = None
         if folderurl is None:
@@ -1249,7 +1027,7 @@ class LionCog(commands.Cog, name="Lion"):
             embed = discord_utils.create_embed()
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
@@ -1326,10 +1104,6 @@ class LionCog(commands.Cog, name="Lion"):
         Usage: ~clonelion SheetName hunturl
         Usage: ~clonelion SheetName hunturl folderurl
         """
-        await logging_utils.log_command(
-            "clonelion", ctx.guild, ctx.channel, str(ctx.author)
-        )
-
         new_sheet = await self.clonetemplatelion(ctx, huntroundname, folderurl)
         if new_sheet is None:
             return
@@ -1344,7 +1118,7 @@ class LionCog(commands.Cog, name="Lion"):
             )
             await discord_utils.send_message(ctx, embed)
 
-    async def initoverview(self, ctx, hunturl, sheet):
+    async def initoverview(self, ctx: commands.Context, hunturl, sheet):
         """Initializes the overview sheet for the hunt."""
         overview = None
 
@@ -1381,9 +1155,6 @@ class LionCog(commands.Cog, name="Lion"):
         Permission Category : Verified Roles only.
         Usage: ~clonetemplatelion SheetName
         """
-        await logging_utils.log_command(
-            "clonetemplatelion", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         result = self.findtemplate(ctx)
@@ -1445,16 +1216,13 @@ class LionCog(commands.Cog, name="Lion"):
 
     @command_predicates.is_solver()
     @commands.command(name="tetherlion", aliases=["tetherhydra"])
-    async def tetherlion(self, ctx, sheet_key_or_link: str):
+    async def tetherlion(self, ctx: commands.Context, sheet_key_or_link: str):
         """Tethers a sheet to the category and also checks that it is the correct format to be used by the lion commands
 
         Sheet must have the following tabs: Overview, Template, Meta Template
 
         Usage: ~tetherlion sheeturl
         """
-        await logging_utils.log_command(
-            "tetherlion", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if await self.validate_template(ctx, sheet_key_or_link) is None:

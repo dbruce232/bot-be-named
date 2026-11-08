@@ -4,10 +4,10 @@ import aiohttp
 import io
 import emoji
 from nextcord.ext import commands
-from utils import discord_utils, logging_utils, command_predicates
+from utils import discord_utils, command_predicates
 
 """
-Discord module. Functions and commands related specificially to discord functionality, that does not intersect with any other modules.
+Discord module. Functions and commands related specifically to discord functionality, that does not intersect with any other modules.
 For example, pinning/unpinning messages, or getting statistics for a server.
 """
 
@@ -25,7 +25,7 @@ class DiscordCog(commands.Cog, name="Discord"):
     ####################
 
     @commands.command(name="pin")
-    async def pin(self, ctx, to_delete: str = ""):
+    async def pin(self, ctx: commands.Context, to_delete: str = ""):
         """Pin a message (Either reply to the message, or it auto pins the message above)
 
         If the message is already pinned, just unpins and repins (brings it to top of pins).
@@ -36,10 +36,10 @@ class DiscordCog(commands.Cog, name="Discord"):
         Usage: `~pin` (to just pin the last message)
         Usage: `~pin del` (to pin the message and also delete the msg)
         """
-        await logging_utils.log_command("pin", ctx.guild, ctx.channel, ctx.author)
-
         if not ctx.message.reference:
-            channel_history = await ctx.message.channel.history(limit=2).flatten()
+            channel_history = [
+                message async for message in ctx.message.channel.history(limit=2)
+            ]
             message = channel_history[-1]
         else:
             message = await ctx.fetch_message(ctx.message.reference.message_id)
@@ -66,13 +66,11 @@ class DiscordCog(commands.Cog, name="Discord"):
             return
 
     @commands.command(name="pinme")
-    async def pinme(self, ctx):
+    async def pinme(self, ctx: commands.Context):
         """Pins the message that called it.
 
         Usage : `~pinme Message`
         """
-        await logging_utils.log_command("pinme", ctx.guild, ctx.channel, ctx.author)
-
         embed_or_none = await discord_utils.pin_message(ctx.message)
         # Error pinning, send error message to user
         if embed_or_none is not None:
@@ -81,7 +79,9 @@ class DiscordCog(commands.Cog, name="Discord"):
             await ctx.message.add_reaction(emoji.emojize(":pushpin:"))
 
     @commands.command(name="unpin")
-    async def unpin(self, ctx, num_to_unpin: int = 1, delete_argument: str = ""):
+    async def unpin(
+        self, ctx: commands.Context, num_to_unpin: int = 1, delete_argument: str = ""
+    ):
         """Unpins a specific message from a channel, or a given number of pins.
 
         If `delete` is passed in as the last argument, it deletes the original message that called the command and
@@ -91,7 +91,6 @@ class DiscordCog(commands.Cog, name="Discord"):
         Usage: `~unpin` (as a reply to pinned message)
         Usage: `~unpin 3 delete` (unpins latest 3 pins and deletes command message)
         """
-        await logging_utils.log_command("unpin", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         to_delete = False  # Use this to decide whether to delete extra messages or not
@@ -160,13 +159,12 @@ class DiscordCog(commands.Cog, name="Discord"):
             await ctx.message.add_reaction(emoji.emojize(":check_mark_button:"))
 
     @commands.command(name="lspin", aliases=["lspins", "listpin", "listpins"])
-    async def listpin(self, ctx):
+    async def listpin(self, ctx: commands.Context):
         """Lists all the pinned posts in the current channel
 
         Usage: `~listpins~`
         """
 
-        await logging_utils.log_command("listpin", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         pins = await ctx.message.channel.pins()
@@ -189,13 +187,12 @@ class DiscordCog(commands.Cog, name="Discord"):
 
     @command_predicates.is_verified()
     @commands.command(name="stats")
-    async def stats(self, ctx):
+    async def stats(self, ctx: commands.Context):
         """Get server stats
 
         Permission Category : Verified Roles only.
         Usage: `~stats`
         """
-        await logging_utils.log_command("stats", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         guild = ctx.guild
@@ -233,14 +230,13 @@ class DiscordCog(commands.Cog, name="Discord"):
 
     @command_predicates.is_verified()
     @commands.command(name="catstats")
-    async def catstats(self, ctx, cat_name: str = ""):
+    async def catstats(self, ctx: commands.Context, cat_name: str = ""):
         """Get category stats
 
         Permission Category : Verified Roles only.
         Usage: `~catstats` (current category)
         Usage: `~catstats "Cat Name"` (Named category)
         """
-        await logging_utils.log_command("catstats", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if cat_name == "":
@@ -281,14 +277,11 @@ class DiscordCog(commands.Cog, name="Discord"):
             "lsreaction",
         ],
     )
-    async def listreacts(self, ctx):
+    async def listreacts(self, ctx: commands.Context):
         """List all reactions made to a given message
 
         Usage: `~listreacts` (as a reply to a message)
         """
-        await logging_utils.log_command(
-            "listreacts", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if not ctx.message.reference:
@@ -306,7 +299,7 @@ class DiscordCog(commands.Cog, name="Discord"):
             embed_message = (
                 embed_message
                 + "\n"
-                + f" {reaction.emoji} - {' : '.join([user.mention for user in await reaction.users().flatten()])}"
+                + f" {reaction.emoji} - {' : '.join([user.mention async for user in reaction.users()])}"
             )
 
         embed.add_field(
@@ -316,12 +309,11 @@ class DiscordCog(commands.Cog, name="Discord"):
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="listemoji", aliases=["lsemoji", "listemojis", "lsemojis"])
-    async def listemoji(self, ctx):
+    async def listemoji(self, ctx: commands.Context):
         """List all emojis in a server
 
         Usage: `~listemojis`
         """
-        await logging_utils.log_command("listemoji", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
         embed.add_field(
             name=f"Emoji in {ctx.guild.name}",
@@ -332,14 +324,15 @@ class DiscordCog(commands.Cog, name="Discord"):
     @command_predicates.is_verified()
     @commands.command(name="steal")
     async def steal(
-        self, ctx, *emojis: typing.Union[nextcord.Emoji, nextcord.PartialEmoji]
+        self,
+        ctx: commands.Context,
+        *emojis: typing.Union[nextcord.Emoji, nextcord.PartialEmoji],
     ):
         """Steals an emote from another server and uploads it to this server with the same name.
 
         Permission Category : Verified Roles only.
         Usage: `~steal :emote1: :emote2:`
         """
-        await logging_utils.log_command("steal", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         for to_steal in emojis:
@@ -386,7 +379,7 @@ class DiscordCog(commands.Cog, name="Discord"):
 
     @command_predicates.is_solver()
     @commands.command(name="delete")
-    async def delete(self, ctx, to_delete: str = ""):
+    async def delete(self, ctx: commands.Context, to_delete: str = ""):
         """Delete a message sent by me and only me by replying to it with `~delete`.
 
         If you say del after the command, it deletes the original message that called the command too.
@@ -396,7 +389,6 @@ class DiscordCog(commands.Cog, name="Discord"):
         Usage: `~delete del` (delete both the bot message and the command message)
         """
 
-        await logging_utils.log_command("delete", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if not ctx.message.reference:

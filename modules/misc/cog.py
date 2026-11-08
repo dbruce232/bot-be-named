@@ -3,7 +3,7 @@ import os
 from nextcord.ext import commands
 from emoji import EMOJI_DATA, emojize
 import emoji
-from utils import discord_utils, logging_utils, command_predicates
+from utils import discord_utils, command_predicates
 
 """
 Misc module. A collection of Misc useful/fun commands. Also everything not in any other module.
@@ -19,13 +19,12 @@ class MiscCog(commands.Cog, name="Misc"):
         self.bot = bot
 
     @commands.command(name="emojiall")
-    async def emojiall(self, ctx, emoji_count: int = 20):
+    async def emojiall(self, ctx: commands.Context, emoji_count: int = 20):
         """Reacts to the replied message with respective number of emojis (Uses A-Z emojis).
 
         Use: (as reply to another message) `~emojiall 5`
         Use: (as reply to another message) `~emojiall` (defaults to 20)
         """
-        await logging_utils.log_command("emojiall", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if emoji_count <= 0:
@@ -53,7 +52,7 @@ class MiscCog(commands.Cog, name="Misc"):
         await ctx.message.add_reaction(emoji.emojize(":check_mark_button:"))
 
     @commands.command(name="emoji")
-    async def emoji(self, ctx, *args):
+    async def emoji(self, ctx: commands.Context, *args):
         """Finds the custom emoji mentioned and uses it.
         This command works for normal as well as animated emojis, as long as the bot is in one server with that emoji.
 
@@ -68,7 +67,6 @@ class MiscCog(commands.Cog, name="Misc"):
         Usage : `~emoji :an_emoji: sunglasses`
         """
 
-        await logging_utils.log_command("emoji", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if not args:
@@ -225,12 +223,11 @@ class MiscCog(commands.Cog, name="Misc"):
                 await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="about", aliases=["aboutthebot", "github"])
-    async def about(self, ctx):
+    async def about(self, ctx: commands.Context):
         """A quick primer about BBN and what it does
 
         Usage : `~about`
         """
-        await logging_utils.log_command("about", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         owner = await self.bot.fetch_user(os.getenv("BOT_OWNER_DISCORD_ID"))
@@ -258,7 +255,7 @@ class MiscCog(commands.Cog, name="Misc"):
             f"6. Tether your sheet to your category! (`{ctx.prefix}tetherhydra https://your.google.sheet.here`) Make sure you configure the sharing settings so I can edit it! \n"
             f"7. Start making puzzle channels! (`{ctx.prefix}chanhydra 'Puzzle Name Here' 'puzzle.url.here.com'`)\n"
             f"8. Start solving! Mark puzzles as solved with `{ctx.prefix}solvedhydra 'ANSWER'`, backsolved with `{ctx.prefix}backsolvedhydra 'ANSWER'`,"
-            f" move to archive with `{ctx.prefix}mtahydra` and more! and more!\n\n",
+            f" move to archive with `{ctx.prefix}mtahydra` and more!\n\n",
         )
         await discord_utils.send_message(ctx, embed)
 
@@ -274,12 +271,11 @@ class MiscCog(commands.Cog, name="Misc"):
         await discord_utils.send_message(ctx, embed)
 
     @commands.command(name="info", aliases=["startup", "start"])
-    async def info(self, ctx):
+    async def info(self, ctx: commands.Context):
         """A quick primer about helpful BBN functions
 
         Usage : `~info`
         """
-        await logging_utils.log_command("info", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         embed.add_field(
@@ -291,7 +287,7 @@ class MiscCog(commands.Cog, name="Misc"):
             f"Commonly used commands include-\n"
             f"- `{ctx.prefix}chanhydra` for making Google Sheet tabs for your current hunt\n"
             f"- `{ctx.prefix}solvedhydra` etc for marking puzzle channels as solved etc, and `{ctx.prefix}mtahydra` for cleaning up the channels. \n"
-            f"- `{ctx.prefix}addcustomcommand` etc for making a customised command with reply.\n\n",
+            f"- `{ctx.prefix}addcc` etc for making a customised command with reply.\n\n",
             inline=False,
         )
         await discord_utils.send_message(ctx, embed)
@@ -299,7 +295,7 @@ class MiscCog(commands.Cog, name="Misc"):
         embed = discord_utils.create_embed()
         embed.add_field(
             name="Permissions!",
-            value=f"I have a simple permisison system to manage who can use what commands. Most commands are restricted to certain permissions. "
+            value=f"I have a simple permission system to manage who can use what commands. Most commands are restricted to certain permissions. "
             f"There are five permission categories:\n"
             f"- `(everyone)`: Can use basic commands like `{ctx.prefix}about`, `{ctx.prefix}help` etc.\n"
             f"- `Solver`: Can use most puzzle management commands.\n"
@@ -329,14 +325,13 @@ class MiscCog(commands.Cog, name="Misc"):
 
     @command_predicates.is_trusted()
     @commands.command(name="botsay")
-    async def botsay(self, ctx, channel_id_or_name: str, *args):
+    async def botsay(self, ctx: commands.Context, channel_id_or_name: str, *args):
         """Say something in another channel
 
         Permission Category : Trusted roles only.
         Usage: `~botsay channelname Message`
         Usage: `~botsay #channelmention Longer Message`
         """
-        await logging_utils.log_command("botsay", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if len(args) < 1:
@@ -361,7 +356,7 @@ class MiscCog(commands.Cog, name="Misc"):
             embed.add_field(
                 name="Failed",
                 value=f"Forbidden! The bot is unable to speak on {channel.mention}! Have you checked if "
-                f"the bot has the required permisisons?",
+                f"the bot has the required permissions?",
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -375,16 +370,13 @@ class MiscCog(commands.Cog, name="Misc"):
 
     @command_predicates.is_trusted()
     @commands.command(name="botsayembed")
-    async def botsayembed(self, ctx, channel_id_or_name: str, *args):
+    async def botsayembed(self, ctx: commands.Context, channel_id_or_name: str, *args):
         """Say something in another channel, but as an embed
 
         Permission Category : Trusted roles only.
         Usage: `~botsayembed channelname Message`
         Usage: `~botsayembed #channelmention Longer Message`
         """
-        await logging_utils.log_command(
-            "botsayembed", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if len(args) < 1:
@@ -411,7 +403,7 @@ class MiscCog(commands.Cog, name="Misc"):
             embed.add_field(
                 name="Failed",
                 value=f"Forbidden! The bot is unable to speak on {channel.mention}! Have you checked if "
-                f"the bot has the required permisisons?",
+                f"the bot has the required permissions?",
             )
             await discord_utils.send_message(ctx, embed)
             return

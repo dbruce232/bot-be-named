@@ -1,3 +1,4 @@
+from typing import Optional, Union
 import nextcord
 import constants
 import gspread
@@ -9,18 +10,21 @@ import emoji
 from collections import Counter
 from nextcord.ext import commands
 from utils import (
+    batch_update_utils,
     discord_utils,
     google_utils,
-    logging_utils,
     command_predicates,
     sheets_constants,
     sheet_utils,
 )
-from modules.hydra.hydra_utils import hydra_helpers
+from modules.hydra.hydra_utils import hydra_helpers, summary_utils
 from modules.hydra.hydra_utils import discord_utils as hydra_discord_utils
 from modules.hydra.hydra_utils import sheet_utils as hydra_sheet_utils
 from modules.hydra.hydra_utils.sheet_command_base import SheetCommandBase
 from modules.hydra import constants as hydra_constants
+import database
+import sqlalchemy
+from sqlalchemy.orm import Session
 
 """
 Hydra module. Module with more advanced GSheet-Discord interfacing. See module's README.md for more.
@@ -51,10 +55,6 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~roundhydra` (retrieves current round)
         Usage: `~roundhydra "Round Name"` (sets round)
         """
-        await logging_utils.log_command(
-            "roundhydra", ctx.guild, ctx.channel, ctx.author
-        )
-
         base = SheetCommandBase(ctx, self.gspread_client)
         curr_sheet_link, overview_sheet, row_to_find = await base.get_sheet_context()
 
@@ -131,17 +131,57 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="noteshydra")
-    async def noteshydra(self, ctx: commands.Context, notes: str = None):
+    async def noteshydra(self, ctx: commands.Context, *args: str):
         """Sets or updates the notes information on the Overview sheet. Passing no argument retrieves the current notes.
+
+        Passing channel mentions retrieves the notes for each of those channels instead.
 
         Permission Category : Solver Roles only
         Usage: `~noteshydra` (retrieves current notes)
         Usage: `~noteshydra "This puzzle has unclued anagrams."` (sets notes)
+        Usage: `~noteshydra #puzzle-1 #puzzle-2` (retrieves notes for the mentioned channels)
         """
+        if args and all(re.fullmatch(r"<#\d+>", arg) for arg in args):
+            # Regex searches for channel mentions
+            channels = []
+            lines = []
+            for arg in args:
+                channel = ctx.guild.get_channel_or_thread(int(arg[2:-1]))
+                # Just in case, only include channels caller can see
+                if (
+                    channel is None
+                    or not channel.permissions_for(ctx.author).view_channel
+                ):
+                    lines.append(f"I couldn't find channel `{arg}`.")
+                else:
+                    channels.append(channel)
 
-        await logging_utils.log_command(
-            "noteshydra", ctx.guild, ctx.channel, ctx.author
-        )
+            found, failed, missing = await summary_utils.find_channel_rows(
+                self.gspread_client, ctx, channels
+            )
+            _, col_idx = gspread.utils.a1_to_rowcol(sheets_constants.NOTES_COLUMN + "1")
+            for channel, rownum, overview_values in found:
+                try:
+                    current_notes = overview_values[rownum - 1][col_idx - 1]
+                except IndexError:
+                    current_notes = None
+                if current_notes:
+                    lines.append(f"{channel.mention}: `{current_notes}`")
+                else:
+                    lines.append(
+                        f"The current notes for {channel.mention} are not set."
+                    )
+            for channel in failed:
+                lines.append(f"{channel.mention} - **Failed to load sheet!**")
+            for channel in missing:
+                lines.append(f"{channel.mention} is not on a tethered Overview sheet.")
+
+            embed = discord_utils.create_embed()
+            embed.add_field(name="Current Notes", value="\n".join(lines), inline=False)
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        notes = args[0] if args else None
 
         base = SheetCommandBase(ctx, self.gspread_client)
         curr_sheet_link, overview_sheet, row_to_find = await base.get_sheet_context()
@@ -216,29 +256,175 @@ class HydraCog(commands.Cog, name="Hydra"):
             await discord_utils.send_message(ctx, embed)
 
     @command_predicates.is_solver()
+    @commands.command(name="renamehydra")
+    async def renamehydra(self, ctx: commands.Context, new_name: Optional[str] = None):
+        """Renames the current discord channel and puzzle tab to the new name.
+        Keep in mind, if there is a status prefix in the channel name, it will be overwritten.
+        Don't worry, you can just call the command you used to change the status again to restore it.
+
+        Permission Category : Solver Roles only.
+        Usage: `~renamehydra "New Puzzle Name"`
+        """
+        # Type guard: ensure we're in a guild text channel
+        if not isinstance(ctx.channel, (nextcord.TextChannel, nextcord.Thread)):
+            embed = hydra_helpers.create_failure_embed(
+                "This command can only be used in a guild text channel or thread."
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        # Check if new_name is provided
+        if new_name is None or new_name.strip() == "":
+            embed = hydra_helpers.create_failure_embed(
+                "You need to provide a new name for the puzzle."
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        new_name = new_name.strip()
+
+        base = SheetCommandBase(ctx, self.gspread_client)
+        curr_sheet_link, overview_sheet, row_to_find = await base.get_sheet_context()
+
+        if overview_sheet is None or curr_sheet_link is None:
+            return
+
+        embed = discord_utils.create_embed()
+
+        # Get the sheet tab ID for the current channel
+        sheet_tab_id_col = sheets_constants.SHEET_TAB_ID_COLUMN
+        sheet_tab_id = overview_sheet.get_cell_value(
+            sheet_tab_id_col + str(row_to_find)
+        )
+
+        if sheet_tab_id is None or sheet_tab_id == "":
+            embed = hydra_helpers.create_failure_embed(
+                f"Could not find sheet tab ID for {ctx.channel.mention}."
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        try:
+            # Get the spreadsheet
+            curr_sheet = self.gspread_client.open_by_url(curr_sheet_link)
+
+            # Get the worksheet by ID
+            worksheet = None
+            for ws in curr_sheet.worksheets():
+                if str(ws.id) == str(sheet_tab_id):
+                    worksheet = ws
+                    break
+
+            if worksheet is None:
+                embed = hydra_helpers.create_failure_embed(
+                    f"Could not find worksheet with ID {sheet_tab_id}."
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+
+            old_tab_name = worksheet.title
+            new_tab_name = new_name.replace("#", "").replace("-", " ")
+
+            # Check if a sheet with the new name already exists
+            existing_sheet_names = {ws.title for ws in curr_sheet.worksheets()}
+            if new_tab_name in existing_sheet_names and new_tab_name != old_tab_name:
+                embed = hydra_helpers.create_failure_embed(
+                    f"A sheet with the name `{new_tab_name}` already exists."
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+
+            # Prepare batch update
+            batch = batch_update_utils.BatchUpdateBuilder()
+
+            # Rename the sheet tab
+            batch.rename_sheet(sheet_id=int(sheet_tab_id), new_name=new_tab_name)
+
+            # Update the puzzle name in the Overview sheet
+            puzzle_name_col = overview_sheet.get_cell_value(
+                sheets_constants.PUZZLE_NAME_COLUMN_LOCATION
+            )
+            final_sheet_link = curr_sheet_link + "/edit#gid=" + str(sheet_tab_id)
+            batch.update_cell_by_label(
+                sheet_id=overview_sheet.worksheet.id,
+                label=puzzle_name_col + str(row_to_find),
+                value=f'=HYPERLINK("{final_sheet_link}", "{new_name}")',
+                is_formula=True,
+            )
+
+            # Update the channel name in the sheet tab
+            batch.update_cell_by_label(
+                sheet_id=int(sheet_tab_id),
+                label=sheets_constants.TAB_CHAN_NAME_LOCATION,
+                value=new_name,
+            )
+
+            # Execute the batch update
+            curr_sheet.batch_update(batch.build())
+
+            # Let users know the rename has started, since Discord allows
+            # 2 renames per 10 minutes and holds the rename until then
+            progress_embed = discord_utils.create_embed()
+            progress_embed.add_field(
+                name="Rename in progress",
+                value="If this takes a while, Discord may delay channel renames by up to **10** minutes due to rate limiting."
+                "The spreadsheet has already been renamed.",
+                inline=False,
+            )
+            progress_msg = (await discord_utils.send_message(ctx, progress_embed))[0]
+
+            # Rename the Discord channel
+            new_channel_name = new_name.lower().replace(" ", "-")
+            try:
+                await ctx.channel.edit(name=new_channel_name)
+            finally:
+                await progress_msg.delete()
+
+            # Send success message
+            embed.add_field(
+                name="Success",
+                value=f"Successfully renamed the puzzle to `{new_name}`.\n"
+                f"- Discord channel renamed to {ctx.channel.mention}\n"
+                f"- Sheet tab renamed to `{new_tab_name}`\n"
+                f"- Overview updated",
+                inline=False,
+            )
+            await ctx.message.add_reaction(emoji.emojize(":check_mark_button:"))
+            await discord_utils.send_message(ctx, embed)
+
+        except gspread.exceptions.APIError as e:
+            await hydra_helpers.handle_gspread_error(ctx, e, embed)
+            return
+        except Exception as e:
+            embed = hydra_helpers.create_failure_embed(
+                f"An error occurred while renaming: `{str(e)}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+
+    @command_predicates.is_solver()
     @commands.command(name="catsummaryhydra", aliases=["categorysummaryhydra"])
-    async def catsummaryhydra(self, ctx) -> None:
-        """Collates all the notes on the overview sheet for each text channel in the category the command was
-        called in. Silently skips channels not on the overview. The sheet will need to follow the Hydra
+    async def catsummaryhydra(self, ctx: commands.Context) -> None:
+        """Collates all the notes on the overview sheet for each text channel in the categories allowed for your roles.
+        Silently skips channels not on the overview. The sheet will need to follow the Hydra
         requirements for this to work as expected.
+
+        An admin must first allow a role in this channel with `~summaryallowhydra`.
+        You get one summary merged across every allowed role you have. For each role it covers the non-archive
+        categories that explicitly give that role View Channel, and leaves out channels that explicitly deny it.
 
         Permission Category : Solver Roles only.
 
         Usage: `~catsummaryhydra`
         """
-        await logging_utils.log_command(
-            "catsummaryhydra", ctx.guild, ctx.channel, ctx.author
-        )
-        embed = discord_utils.create_embed()
-
-        currcat = ctx.message.channel.category
+        matched_roles = await summary_utils.get_matched_roles(ctx)
+        if not matched_roles:
+            return
 
         start_embed = discord_utils.create_embed()
         start_embed.add_field(
             name="Summary Started",
-            value=f"Your summarizing of category `{currcat.name}`"
-            f" has begun! This may take a while. If I run into "
-            f"any errors, I'll let you know.",
+            value="Your summarizing has begun! This may take a while, if I run into "
+            "any errors, I'll let you know.",
             inline=False,
         )
 
@@ -246,56 +432,27 @@ class HydraCog(commands.Cog, name="Hydra"):
         initial_message = (await discord_utils.send_message(ctx, start_embed))[0]
 
         try:
-            allchans = currcat.text_channels
             messages = []
-            allsheets = []
+            seen_channels = set()  # A channel can be visible to more than one role
 
-            # Group all channels sharing the same tethered sheet. Now find the right cell
-            for currchan in allchans:
-                result, _ = sheet_utils.findsheettether(
-                    currchan.category_id, currchan.id
-                )
-                if result is None:
-                    continue  # Silently skip channels with no tether
-                curr_sheet_link = result.sheet_link
-                allsheets.append((curr_sheet_link, currchan))
-
-            all_unique_sheets = list(set([x[0] for x in allsheets]))
-
-            for curr_sheet_link in all_unique_sheets:
-                list_curr_sheet_chans = [
-                    x[1] for x in allsheets if x[0] == curr_sheet_link
-                ]
-
-                list_chan_cells_overview = await hydra_sheet_utils.findchanidcell(
-                    self.gspread_client,
-                    ctx,
-                    curr_sheet_link,
-                    [x.id for x in list_curr_sheet_chans],
+            overview_col = sheets_constants.NOTES_COLUMN
+            _, col_idx = gspread.utils.a1_to_rowcol(overview_col + "1")
+            for role in matched_roles:
+                categories = summary_utils.get_role_categories(ctx.guild, role)
+                entries, failed = await summary_utils.get_roles_channels(
+                    self.gspread_client, ctx, role, categories
                 )
 
-                if list_chan_cells_overview is None:
-                    for currchan in list_curr_sheet_chans:
-                        messages.append(
-                            f"- {currchan.mention} - **Failed to load sheet!**"
-                        )
-                    continue
+                for currchan in failed:
+                    if currchan.id in seen_channels:
+                        continue
+                    seen_channels.add(currchan.id)
+                    messages.append(f"- {currchan.mention} - **Failed to load sheet!**")
 
-                overview_col = sheets_constants.NOTES_COLUMN
-                _, sample_overview, sample_values = next(
-                    (t for t in list_chan_cells_overview if t[1] is not None),
-                    (None, None, None),
-                )
-
-                if sample_overview is None or sample_values is None:
-                    continue  # Silently skip if no valid overview found
-
-                _, col_idx = gspread.utils.a1_to_rowcol(overview_col + "1")
-                for i in range(len(list_curr_sheet_chans)):
-                    currchan = list_curr_sheet_chans[i]
-                    rownum, overview, overview_values = list_chan_cells_overview[i]
-                    if rownum is None or overview is None:
-                        continue  # Silently skip again
+                for currchan, rownum, overview_values in entries:
+                    if currchan.id in seen_channels:
+                        continue
+                    seen_channels.add(currchan.id)
 
                     # Safe get overview values
                     try:
@@ -317,8 +474,7 @@ class HydraCog(commands.Cog, name="Hydra"):
             embed = discord_utils.create_embed()
             embed.add_field(
                 name="Failed",
-                value=f"An error occurred while summarizing category `{currcat.name}`. "
-                f"Error: {str(e)}",
+                value=f"An error occurred while summarizing. Error: {str(e)}",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
@@ -329,7 +485,7 @@ class HydraCog(commands.Cog, name="Hydra"):
             embed = discord_utils.create_embed()
             embed.add_field(
                 name="Failed",
-                value=f"No text channels found in category `{currcat.name}`.",
+                value="No puzzle channels found for your roles yet.",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
@@ -360,7 +516,7 @@ class HydraCog(commands.Cog, name="Hydra"):
     @commands.command(name="anychanhydra", aliases=["anyhydra"])
     async def anychanhydra(
         self,
-        ctx,
+        ctx: commands.Context,
         *,
         args,
     ):
@@ -376,17 +532,15 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         Usage: ~anychanhydra "Puzzle Name" "TemplateName" (uses "TemplateName Template" from the sheet)
         Usage: ~anychanhydra PuzzleName "Square" "http://www.linktopuzzle.com" (uses "Square Template" from the sheet)
+        Usage: ~anychanhydra PuzzleName "Square" "http://www.linktopuzzle.com" "Some notes here" (with notes)
+        Usage: ~anychanhydra "Puzzle Name" "Template" (uses the plain "Template" tab)
         """
-        await logging_utils.log_command(
-            "anychanhydra", ctx.guild, ctx.channel, ctx.author
-        )
-
         arg_list = shlex.split(args)
-        if len(arg_list) < 2 or len(arg_list) > 3:
+        if len(arg_list) < 2 or len(arg_list) > 4:
             embed = discord_utils.create_embed()
             embed.add_field(
                 name="Failed",
-                value="Invalid arguments. Usage: `~anychanhydra [puzzle name] [template name] [puzzle url (optional)]`",
+                value="Invalid arguments. Usage: `~anychanhydra [puzzle name] [template name] [puzzle url (optional)] [notes (optional)]`",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
@@ -395,6 +549,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         puzzle_name = arg_list[0]
         template_name = arg_list[1]
         puzzle_url = arg_list[2] if len(arg_list) > 2 else None
+        notes = arg_list[3] if len(arg_list) > 3 else None
 
         await hydra_sheet_utils.create_puzzle_channel_from_template(
             self.bot,
@@ -403,16 +558,19 @@ class HydraCog(commands.Cog, name="Hydra"):
             template_name,
             puzzle_url,
             self.gspread_client,
+            notes,
         )
 
     @command_predicates.is_solver()
     @commands.command(name="mtahydra", aliases=["movetoarchivehydra"])
-    async def mtahydra(self, ctx, *, category_name: str = None):
+    async def mtahydra(
+        self, ctx: commands.Context, *, category_name: Optional[str] = None
+    ):
         """Finds a category with `<category_name> Archive`, and moves the channel to that category.
         Fails if there is no such category. If the category is full (50 channels), I will make a new one.
         If called from thread (instead of channel), closes the thread instead of moving channel.
 
-        In the hydra implementation of ~mta, the archive category name is stardardized.
+        In the hydra implementation of ~mta, the archive category name is standardized.
 
         It must be in the form of `<category_name> Archive`, e.g. `MH21 Students Archive`.
         Your solving category should not end with Archive.
@@ -426,10 +584,10 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~mtahydra`
         Usage: `~mtahydra archive_category_name`
         """
-        await logging_utils.log_command("mtahydra", ctx.guild, ctx.channel, ctx.author)
         await hydra_sheet_utils.sheet_move_to_archive(self.gspread_client, ctx)
         await hydra_discord_utils.category_move_to_archive(ctx, category_name)
 
+    @command_predicates.is_solver()
     @commands.command(name="chanhydra")
     async def chanhydra(self, ctx: commands.Context, *, content: str = ""):
         """Creates a new tab and a new channel for a new feeder puzzle and then updates the info in the sheet accordingly.
@@ -445,9 +603,9 @@ class HydraCog(commands.Cog, name="Hydra"):
         APuzzle "http://linktoapuzzle.com"
         "B Puzzle" "http://linktobpuzzle.com"
         3rdPuzzle
+        4thPuzzle "http://link.com" "Some notes here"
         """
 
-        await logging_utils.log_command("chanhydra", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         content = content.strip()
@@ -482,7 +640,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
             puzzle_name = " ".join(parts[:-1]) if parts[-1].startswith('http') else " ".join(parts)
             puzzle_url = parts[-1] if parts[-1].startswith('http') else ""
-            puzzle_configs.append((puzzle_name, puzzle_url))
+            puzzle_configs.append((puzzle_name, puzzle_url, None))
 
         if not puzzle_configs:
             embed.add_field(
@@ -523,7 +681,7 @@ class HydraCog(commands.Cog, name="Hydra"):
                 name="Success",
                 value=(
                     f"Successfully created {success_count} puzzle channel(s):\n\n"
-                    "\n".join(success_messages)
+                    + "\n".join(success_messages)
                     if success_messages
                     else f"Successfully created {success_count} puzzle channel(s)!"
                 ),
@@ -557,17 +715,12 @@ class HydraCog(commands.Cog, name="Hydra"):
 
         Usage: `~deletehydra #puzzle-channel` (deletes #puzzle-channel)
         """
-        await logging_utils.log_command(
-            "deletehydra", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # Check if channel mention is provided
         if channel_mention == "":
-            embed.add_field(
-                name="Failed",
-                value="Please provide a channel to delete. Usage: `~deletehydra #puzzle-channel`",
-                inline=False,
+            embed = hydra_helpers.create_failure_embed(
+                "Please provide a channel to delete. Usage: `~deletehydra #puzzle-channel`"
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -578,34 +731,35 @@ class HydraCog(commands.Cog, name="Hydra"):
             target_channel = ctx.message.channel_mentions[0]
 
         if target_channel is None:
-            embed.add_field(
-                name="Failed",
-                value="Please mention the channel, not just type its name!",
-                inline=False,
+            embed = hydra_helpers.create_failure_embed(
+                "Please mention the channel, not just type its name!"
             )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        # Type guard: ensure target is a text channel
+        if not isinstance(target_channel, nextcord.TextChannel):
+            embed = hydra_helpers.create_failure_embed("Can only delete text channels.")
             await discord_utils.send_message(ctx, embed)
             return
 
         # Check that the target channel is not the same as the command channel
         if target_channel.id == ctx.channel.id:
-            embed.add_field(
-                name="Failed",
-                value="You cannot delete the channel you are currently in. Please run this command from a different channel.",
-                inline=False,
+            embed = hydra_helpers.create_failure_embed(
+                "You cannot delete the channel you are currently in. Please run this command from a different channel."
             )
             await discord_utils.send_message(ctx, embed)
             return
 
         # Check that the target channel has a valid sheet tether
         result, _ = sheet_utils.findsheettether(
-            target_channel.category_id, target_channel.id
+            target_channel.category_id if target_channel.category_id else 0,
+            target_channel.id,
         )
 
         if result is None:
-            embed.add_field(
-                name="Failed",
-                value=f"The channel {target_channel.mention} is not tethered to any Google sheet.",
-                inline=False,
+            embed = hydra_helpers.create_failure_embed(
+                f"The channel {target_channel.mention} is not tethered to any Google sheet."
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -625,8 +779,8 @@ class HydraCog(commands.Cog, name="Hydra"):
             f"React with ✅ to confirm or ❌ to cancel.",
         )
 
-        confirm_emoji = hydra_constants.CONFIRM_EMOJI
-        cancel_emoji = hydra_constants.CANCEL_EMOJI
+        confirm_emoji = "✅"
+        cancel_emoji = "❌"
 
         confirm_message = (await discord_utils.send_message(ctx, confirm_embed))[0]
         await confirm_message.add_reaction(confirm_emoji)
@@ -636,11 +790,7 @@ class HydraCog(commands.Cog, name="Hydra"):
             return (
                 user == ctx.author
                 and reaction.message.id == confirm_message.id
-                and str(reaction.emoji)
-                in (
-                    hydra_constants.CONFIRM_EMOJI,
-                    hydra_constants.CANCEL_EMOJI,
-                )
+                and str(reaction.emoji) in ("✅", "❌")
             )
 
         try:
@@ -654,14 +804,14 @@ class HydraCog(commands.Cog, name="Hydra"):
             timeout_embed.add_field(
                 name="Cancelled!",
                 value="No confirmation received in time. "
-                f"{target_channel.mention} will not deleted.",
+                f"{target_channel.mention} will not be deleted.",
                 inline=False,
             )
             await discord_utils.send_message(ctx, timeout_embed)
             return
 
         # If the user reacted with the cancel emoji, abort immediately.
-        if str(reaction.emoji) == hydra_constants.CANCEL_EMOJI:
+        if str(reaction.emoji) == "❌":
             cancel_embed = discord_utils.create_embed()
             cancel_embed.add_field(
                 name="Aborted!",
@@ -702,10 +852,10 @@ class HydraCog(commands.Cog, name="Hydra"):
                     self.gspread_client, ctx, curr_sheet_link
                 )
 
+                tab_id = None
                 tab_name = None
                 row_to_find = None
-                overview_ws = None
-                tab_name_found = False
+                tab_id_found = False
 
                 if overview_sheet is not None:
                     # We need to find the row by channel ID
@@ -718,17 +868,18 @@ class HydraCog(commands.Cog, name="Hydra"):
 
                     if list_chan_cells and list_chan_cells[0][0] is not None:
                         row_to_find = list_chan_cells[0][0]
-                        overview_ws = overview_sheet.worksheet
 
-                        # Get tab name from the appropriate column
-                        # Get the cell formula from column D
+                        # Get tab ID from the sheet ID column... not the puzzle name column
+                        sheet_tab_id_col = sheets_constants.SHEET_TAB_ID_COLUMN
                         try:
-                            tab_name = overview_ws.acell(
-                                f"D{row_to_find}"
-                            ).value  # FIXME - hardcoded
-                            tab_name_found = True
-                        except gspread.exceptions.APIError:
-                            tab_name_found = False
+                            tab_id_str = overview_sheet.get_cell_value(
+                                sheet_tab_id_col + str(row_to_find)
+                            )
+                            if tab_id_str:
+                                tab_id = int(tab_id_str)
+                                tab_id_found = True
+                        except (gspread.exceptions.APIError, IndexError, ValueError):
+                            tab_id_found = False
 
                 # 3. Delete discord channel
                 channel_name = target_channel.name
@@ -736,24 +887,23 @@ class HydraCog(commands.Cog, name="Hydra"):
                     reason=f"Deleted by {ctx.author} via `~deletehydra` command."
                 )
 
-                # 4. Delete tab from sheet (skip if tab name wasn't found anyway)
-                if tab_name_found and tab_name:
-                    tab_deleted = False
+                # 4. Delete tab from sheet using worksheet ID
+                tab_deleted = False
+                if tab_id_found and tab_id is not None:
                     try:
-                        sh = self.gspread_client.open_by_url(curr_sheet_link)
+                        sh = (
+                            overview_sheet.spreadsheet
+                            if overview_sheet is not None
+                            else self.gspread_client.open_by_url(curr_sheet_link)
+                        )
 
-                        # Try to find and delete worksheet
-                        ws_to_delete = None
-                        if tab_name:
-                            ws_to_delete = next(
-                                (ws for ws in sh.worksheets() if ws.title == tab_name),
-                                None,
-                            )
+                        tab_name = sh.get_worksheet_by_id(tab_id).title
+                        sh.del_worksheet_by_id(tab_id)
+                        tab_deleted = True
 
-                        if ws_to_delete:
-                            sh.del_worksheet(ws_to_delete)
-                            tab_deleted = True
-                    except gspread.exceptions.APIError:  # Report in final message
+                    except gspread.WorksheetNotFound:  # Report error in final message
+                        pass
+                    except gspread.exceptions.APIError:
                         pass
                     except Exception:
                         pass
@@ -765,12 +915,16 @@ class HydraCog(commands.Cog, name="Hydra"):
                         overview_ws = overview_sheet.worksheet
 
                         # Get the row values
-                        row_values = overview_ws.row_values(row_to_find)
+                        overview_values = overview_sheet.overview_data
+                        if row_to_find <= len(overview_values):
+                            row_values = overview_values[row_to_find - 1]
+                        else:
+                            row_values = []
 
                         if row_values:
                             overview_ws.delete_rows(row_to_find)
                             # A new row probably should be created here, but
-                            # the filter on the overview sheet doesnt apply
+                            # the filter on the overview sheet doesn't apply
                             # properly, so we'll just trust the users good
                             # judgement to add more rows manually
 
@@ -816,17 +970,13 @@ class HydraCog(commands.Cog, name="Hydra"):
             except gspread.exceptions.APIError as e:
                 await hydra_helpers.handle_gspread_error(ctx, e, embed)
             except nextcord.Forbidden:
-                embed.add_field(
-                    name="Failed",
-                    value="I do not have permission to delete the channel.",
-                    inline=False,
+                embed = hydra_helpers.create_failure_embed(
+                    "I do not have permission to delete the channel."
                 )
                 await discord_utils.send_message(ctx, embed)
             except Exception as e:
-                embed.add_field(
-                    name="Failed",
-                    value=f"An unknown error occurred: {str(e)}",
-                    inline=False,
+                embed = hydra_helpers.create_failure_embed(
+                    f"An unknown error occurred: {str(e)}"
                 )
                 await discord_utils.send_message(ctx, embed)
 
@@ -835,207 +985,399 @@ class HydraCog(commands.Cog, name="Hydra"):
         name="watchcategoryhydra",
         aliases=["watchcathydra", "watchcat", "watchcategory"],
     )
-    async def watchcategoryhydra(self, ctx, *args):
-        """Summarise the last `limit` messages across one or more categories:
+    async def watchcategoryhydra(
+        self, ctx: commands.Context, limit_arg: Optional[int] = None
+    ):
+        """Summarise the last `limit` messages across the categories allowed for your roles:
         `limit` caps off at 250.
-        Note: Will pick up messages to which the command user does not have access to.
-        Only counts messages from humans (not bots).
+        Only counts messages from humans (not bots), in channels listed on a tethered sheet's Overview.
+
+        An admin must first allow a role in this channel with `~summaryallowhydra`.
+        You get one summary for each allowed role you have. Each one covers the non-archive categories
+        that explicitly give that role View Channel, and leaves out channels that explicitly deny it.
 
         Permission Category : Solver Roles only.
-        Usage: `~watchcategoryhydra [category names] [limit]`
-        Usage: `~watchcategoryhydra` (current category, limit 100)
-        Usage: `~watchcategoryhydra 50` (current category, limit 50)
-        Usage: `~watchcategoryhydra "Cat 1" "Cat 2"` (multiple categories, limit 100)
-        Usage: `~watchcategoryhydra "Cat 1" "Cat 2" 50` (multiple categories, limit 50)
+        Usage: `~watchcategoryhydra` (limit 100)
+        Usage: `~watchcategoryhydra 50` (limit 50)
         """
-
-        await logging_utils.log_command(
-            "watchcategoryhydra", ctx.guild, ctx.channel, ctx.author
-        )
-        embed = discord_utils.create_embed()
+        matched_roles = await summary_utils.get_matched_roles(ctx)
+        if not matched_roles:
+            return
 
         # Parse arguments
         limit = hydra_constants.WATCH_DEFAULT_LIMIT
-        category_names = []
 
-        if args:
-            # Check if last arg is an integer (limit)
+        if limit_arg is not None:
+            # Check if limit_arg is a positive integer
             try:
-                limit = int(args[-1])
-                category_names = list(args[:-1])
-            except ValueError:
-                # Last arg is not an integer, all args are category names
-                category_names = list(args)
-
-        if limit > hydra_constants.WATCH_MAX_LIMIT:
-            limit = hydra_constants.WATCH_MAX_LIMIT
-
-        # Determine which categories to watch
-        categories = []
-        if not category_names:
-            # No categories specified, use current channel's category
-            currcat = ctx.message.channel.category
-            if currcat is None:
-                embed.add_field(
-                    name="Failed",
-                    value="You must call this command from a channel in a category, or specify category names.",
-                )
-                await discord_utils.send_message(ctx, embed)
-                return
-            categories = [currcat]
-        else:
-            # Find each specified category
-            for cat_name in category_names:
-                cat = await discord_utils.find_category(ctx, cat_name)
-                if cat is None:
-                    embed.add_field(
-                        name="Failed",
-                        value=f"I cannot find category `{cat_name}`. Perhaps check your spelling and try again.",
+                limit = int(limit_arg)
+                if limit <= 0:
+                    embed = hydra_helpers.create_failure_embed(
+                        "Limit must be a positive integer."
                     )
                     await discord_utils.send_message(ctx, embed)
                     return
-                categories.append(cat)
+            except ValueError:
+                embed = hydra_helpers.create_failure_embed("Limit must be an integer.")
+                await discord_utils.send_message(ctx, embed)
+                return
+
+        if limit > hydra_constants.WATCH_MAX_LIMIT:
+            capped_embed = discord_utils.create_embed()
+            capped_embed.add_field(
+                name="Note",
+                value=f"Message limit capped at {hydra_constants.WATCH_MAX_LIMIT} (you requested {limit}).",
+                inline=False,
+            )
+            await discord_utils.send_message(ctx, capped_embed)
+            limit = hydra_constants.WATCH_MAX_LIMIT
 
         start_embed = discord_utils.create_embed()
-        cat_names = ", ".join([f"`{cat.name}`" for cat in categories])
         start_embed.add_field(
             name="Summary Started",
-            value=f"Your summarizing of {len(categories)} categor{'ies' if len(categories) > 1 else 'y'} ({cat_names})"
-            f" has begun! This may take a while. If I run into "
-            f"any errors, I'll let you know.",
+            value="Your summarizing has begun! This may take a while. If I run into any errors, I'll let you know.",
             inline=False,
         )
 
         start_msg = (await discord_utils.send_message(ctx, start_embed))[0]
 
-        embed = discord_utils.create_embed()
+        for role in matched_roles:
+            embed = discord_utils.create_embed()
+            categories = summary_utils.get_role_categories(ctx.guild, role)
+            cat_names = ", ".join([f"`{cat.name}`" for cat in categories])
+            entries, failed = await summary_utils.get_roles_channels(
+                self.gspread_client, ctx, role, categories
+            )
 
-        try:
-            # 1. Fetch initial messages from each channel across categories given
-            channel_histories = []
-            for cat in categories:
-                for ch in cat.text_channels:
+            if not entries and not failed:
+                embed.add_field(
+                    name="Failed",
+                    value="No puzzle channels found for your roles yet.",
+                    inline=False,
+                )
+                await discord_utils.send_message(ctx, embed)
+                continue
+
+            try:
+                # 1. Fetch initial messages from each channel across categories given
+                channel_histories = []
+                total_channels = 0
+                for ch, _, _ in entries:
                     try:
                         history = []
                         async for m in ch.history(
                             limit=hydra_constants.HISTORY_FETCH_LIMIT
                         ):
                             history.append(m)
+                        total_channels += 1
                         if history:
                             channel_histories.append(
                                 (ch, history, 0)
                             )  # (channel, messages, current_index)
                     except Exception:
-                        # Skip channels we can't read
+                        # Skip channels we cant read
                         continue
 
-            # 2. Initialize Min-Heap with the first message from each channel
-            min_heap = []
-            for ch, history, idx in channel_histories:
-                if history:
-                    msg = history[idx]
-                    # Push (timestamp, channel_index, message) - using negative timestamp for max-heap behavior
-                    heapq.heappush(
-                        min_heap,
-                        (-msg.created_at.timestamp(), len(min_heap), ch, history, idx),
-                    )
-
-            # 3. Extract human messages and non bot calls until we have enough
-            msgs = []
-            channel_indices = {ch: i for i, (ch, _, _) in enumerate(channel_histories)}
-
-            while min_heap and len(msgs) < limit:
-                # Get the most recent message
-                _, _, ch, history, idx = heapq.heappop(min_heap)
-                current_msg = history[idx]
-
-                # Check if it's from a human (not a bot)
-                if not current_msg.author.bot and not current_msg.content.startswith(
-                    constants.DEFAULT_BOT_PREFIX
-                ):
-                    msgs.append(
-                        (
-                            current_msg.created_at,
-                            ch,
-                            current_msg.author,
-                            current_msg.content,
+                # 2. Initialize Min-Heap with the first message from each channel
+                min_heap = []
+                for ch, history, idx in channel_histories:
+                    if history:
+                        msg = history[idx]
+                        # Push (timestamp, channel_index, message)
+                        heapq.heappush(
+                            min_heap,
+                            (
+                                -msg.created_at.timestamp(),
+                                len(min_heap),
+                                ch,
+                                history,
+                                idx,
+                            ),
                         )
-                    )
 
-                # Refill the heap from the same channel
-                next_idx = idx + 1
-                if next_idx < len(history):
-                    next_msg = history[next_idx]
-                    heapq.heappush(
-                        min_heap,
-                        (
-                            -next_msg.created_at.timestamp(),
-                            channel_indices.get(ch, 0),
-                            ch,
-                            history,
-                            next_idx,
-                        ),
-                    )
+                # 3. Extract human messages and non bot calls until we have enough
+                msgs = []
+                channel_indices = {
+                    ch: i for i, (ch, _, _) in enumerate(channel_histories)
+                }
 
-        except Exception as e:
+                while min_heap and len(msgs) < limit:
+                    # Get the most recent message
+                    _, _, ch, history, idx = heapq.heappop(min_heap)
+                    current_msg = history[idx]
+
+                    # Check if it's from a human (not a bot)
+                    if (
+                        not current_msg.author.bot
+                        and not current_msg.content.startswith(
+                            constants.DEFAULT_BOT_PREFIX
+                        )
+                    ):
+                        msgs.append(
+                            (
+                                current_msg.created_at,
+                                ch,
+                                current_msg.author,
+                                current_msg.content,
+                            )
+                        )
+
+                    # Refill the heap from the same channel
+                    next_idx = idx + 1
+                    if next_idx < len(history):
+                        next_msg = history[next_idx]
+                        heapq.heappush(
+                            min_heap,
+                            (
+                                -next_msg.created_at.timestamp(),
+                                channel_indices.get(ch, 0),
+                                ch,
+                                history,
+                                next_idx,
+                            ),
+                        )
+            except Exception as e:
+                embed.add_field(
+                    name="Failed",
+                    value=f"An error occurred while fetching messages. Error: {str(e)}",
+                    inline=False,
+                )
+                await discord_utils.send_message(ctx, embed)
+                continue
+
+            # aggregate
+            channel_counts = Counter()
+            author_counts = Counter()
+            for _, ch, author, _ in msgs:
+                channel_counts[ch.mention] += 1
+                author_counts[author.mention] += 1
+
+            total = len(msgs)
             embed.add_field(
-                name="Failed",
-                value=f"An error occurred while fetching messages. Error: {str(e)}",
+                name="Summary",
+                value=f"Analyzed {total} human messages across {total_channels}"
+                f" channels in {len(categories)} categor{'ies' if len(categories) > 1 else 'y'} ({cat_names}).",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
-            return
+            embed = discord_utils.create_embed()
+
+            if channel_counts:
+                ch_lines = [
+                    f"- {ch_mention}: {count} message{'s' if count != 1 else ''}"
+                    for ch_mention, count in channel_counts.most_common()
+                ]
+                embed.add_field(
+                    name="By channel", value="\n".join(ch_lines), inline=False
+                )
+                await discord_utils.send_message(ctx, embed)
+                embed = discord_utils.create_embed()
+
+            if author_counts:
+                author_lines = [
+                    f"- {author_mention}: {count} message{'s' if count != 1 else ''}"
+                    for author_mention, count in author_counts.most_common()
+                ]
+                embed.add_field(
+                    name="By author", value="\n".join(author_lines), inline=False
+                )
+                await discord_utils.send_message(ctx, embed)
 
         # Delete start message
         if start_msg:
             await start_msg.delete()
 
-        # aggregate
-        channel_counts = Counter()
-        author_counts = Counter()
-        for _, ch, author, _ in msgs:
-            channel_counts[ch.mention] += 1
-            author_counts[author.mention] += 1
+    @command_predicates.is_solver()
+    @commands.command(name="statushydra")
+    async def statushydra(self, ctx: commands.Context, status: str, answer: str = None):
+        """Adds a status to the puzzle and updates the sheet and channel name accordingly.
+        Same as `~statuslion`, but adds functionality for the timestamps on the Overview sheet:
 
-        total = len(msgs)
-        total_channels = sum(len(cat.text_channels) for cat in categories)
-        embed.add_field(
-            name="Summary",
-            value=f"Analyzed {total} human messages across {total_channels} channels in {len(categories)} categor{'ies' if len(categories) > 1 else 'y'} ({cat_names}).",
+        You may pick one of [solved, solvedish, backsolved, postsolved, unstarted, unsolvable, stuck, abandoned, "In Progress"] as statuses.
+        Alternatively, you can give a custom status.
+
+        Permission Category : Solver Roles only.
+
+        Usage: `~statushydra status`
+        Usage: `~statushydra solved "answer"`
+        Usage: `~statushydra "custom-update-string" "answer"`
+        """
+        base = SheetCommandBase(ctx, self.gspread_client)
+        _, overview_sheet, row_to_find = await base.get_sheet_context()
+        if overview_sheet is None:
+            return
+
+        solved_cell = sheets_constants.PUZZLE_SOLVED_TIMESTAMP_COLUMN + str(row_to_find)
+        has_solved_time = overview_sheet.get_cell_value(solved_cell) != ""
+        status_col = overview_sheet.get_cell_value(
+            sheets_constants.STATUS_COLUMN_LOCATION
+        )
+        prev_status = sheet_utils.normalize_status(
+            overview_sheet.get_cell_value(status_col + str(row_to_find))
+        )
+
+        new_status = sheet_utils.normalize_status(status)
+        was_solve = prev_status in sheets_constants.solve_statuses
+        is_solve = new_status in sheets_constants.solve_statuses
+
+        # From non-solve to solve makes a timestamp,
+        # From solve to non-solve clears the timestamp.
+        # Going between solves (e.g. Solved -> Backsolved) keeps the original time
+        # ... and going between non-solves clears leftover timestamps.
+        new_value = None
+        if is_solve and not was_solve:
+            new_value = sheet_utils.get_timestamp()
+        elif not is_solve and has_solved_time:
+            new_value = ""
+
+        # Timestamp before lion, as channel renaming can get rate limited
+        if new_value is not None:
+            batch = batch_update_utils.BatchUpdateBuilder()
+            batch.update_cell_by_label(
+                sheet_id=overview_sheet.worksheet.id,
+                label=solved_cell,
+                value=new_value,
+            )
+            try:
+                overview_sheet.spreadsheet.batch_update(batch.build())
+            except gspread.exceptions.APIError as e:
+                await hydra_helpers.handle_gspread_error(ctx, e)
+                return
+
+        statuslion = self.bot.get_command("statuslion")
+        await statuslion(ctx, status, answer)
+
+        if is_solve and not was_solve:
+            await self.post_solve_to_channel(
+                ctx, overview_sheet, row_to_find, status_col, answer
+            )
+
+    async def post_solve_to_channel(
+        self, ctx: commands.Context, overview_sheet, row_to_find, status_col, answer
+    ):
+        """Posts a solved puzzle in solve streams linked to that Google sheet."""
+        with Session(database.DATABASE_ENGINE) as session:
+            streams = (
+                session.query(database.SolveStreams)
+                .filter_by(
+                    sheet_key=overview_sheet.spreadsheet.id, server_id=ctx.guild.id
+                )
+                .all()
+            )
+        if not streams:
+            return
+
+        # Count the solves currently on the Overview sheet
+        solve_count = 1
+        for row in range(4, len(overview_sheet.overview_data) + 1):
+            row_status = sheet_utils.normalize_status(
+                overview_sheet.get_cell_value(status_col + str(row))
+            )
+            if row != row_to_find and row_status in sheets_constants.solve_statuses:
+                solve_count += 1
+
+        name_col = overview_sheet.get_cell_value(
+            sheets_constants.PUZZLE_NAME_COLUMN_LOCATION
+        )
+        puzzle_name = overview_sheet.get_cell_value(name_col + str(row_to_find))
+        puzzle_text = (
+            f"**{puzzle_name}** ({ctx.channel.mention})"
+            if puzzle_name
+            else ctx.channel.mention
+        )
+
+        if answer is None:
+            answer_col = overview_sheet.get_cell_value(
+                sheets_constants.ANSWER_COLUMN_LOCATION,
+            )
+            answer = overview_sheet.get_cell_value(answer_col + str(row_to_find))
+
+        # Clean up answer formatting
+        if answer:
+            clean_answer = answer.strip().replace("\n", " ").upper()
+            answer_display = f"||`{clean_answer}`||"
+        else:
+            answer_display = "*(no answer provided)*"
+
+        stream_embed = discord_utils.create_embed()
+        stream_embed.add_field(
+            name="🎉 Puzzle Solved!",
+            value=(
+                f"Puzzle {puzzle_text} has been solved!\n\n"
+                f"**Answer:** {answer_display}\n\n"
+                f"This is the {solve_count}{hydra_helpers.get_ordinal_suffix(solve_count)} solve of the hunt."
+            ),
             inline=False,
         )
-        await discord_utils.send_message(ctx, embed)
-        embed = discord_utils.create_embed()
 
-        if channel_counts:
-            ch_lines = [
-                f"- {ch_mention}: {count} message{'s' if count != 1 else ''}"
-                for ch_mention, count in channel_counts.most_common()
-            ]
-            embed.add_field(
-                name="By channel",
-                value="\n".join(ch_lines),
-                inline=False,
+        failed = []
+        for stream in streams:
+            stream_channel = self.bot.get_channel(stream.channel_id)
+            if stream_channel is None:
+                failed.append(f"`#{stream.channel_name}`")
+                continue
+            try:
+                await stream_channel.send(embed=stream_embed)
+            except nextcord.HTTPException:
+                failed.append(stream_channel.mention)
+        if failed:
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't post this solve in {', '.join(failed)}. Do I have permission"
+                " to post messages there?"
             )
-        await discord_utils.send_message(ctx, embed)
-        embed = discord_utils.create_embed()
+            await discord_utils.send_message(ctx, embed)
 
-        if author_counts:
-            author_lines = [
-                f"- {author_mention}: {count} message{'s' if count != 1 else ''}"
-                for author_mention, count in author_counts.most_common()
-            ]
-            embed.add_field(
-                name="By author",
-                value="\n".join(author_lines),
-                inline=False,
-            )
+    @command_predicates.is_solver()
+    @commands.command(name="solvedhydra")
+    async def solvedhydra(self, ctx: commands.Context, answer: str = None):
+        """Sets the puzzle to solved and updates the sheet and channel name accordingly.
+        Also records the solved time on the Overview sheet.
 
-        await discord_utils.send_message(ctx, embed)
+        Permission Category : Solver Roles only.
+        Usage: `~solvedhydra`
+        Usage: `~solvedhydra "answer"`
+        """
+        await self.statushydra(ctx, "solved", answer)
+
+    @command_predicates.is_solver()
+    @commands.command(name="backsolvedhydra")
+    async def backsolvedhydra(self, ctx: commands.Context, answer: str = None):
+        """Sets the puzzle to backsolved and updates the sheet and channel name accordingly.
+        Also records the solved time on the Overview sheet.
+
+        Permission Category : Solver Roles only.
+        Usage: `~backsolvedhydra`
+        Usage: `~backsolvedhydra "answer"`
+        """
+        await self.statushydra(ctx, "backsolved", answer)
+
+    @command_predicates.is_solver()
+    @commands.command(name="solvedishhydra")
+    async def solvedishhydra(self, ctx: commands.Context, answer: str = None):
+        """Sets the puzzle to solvedish and updates the sheet and channel name accordingly.
+        Records a new solved time on te Overview sheet.
+
+        Permission Category : Solver Roles only.
+        Usage: `~solvedishhydra`
+        Usage: `~solvedishhydra "answer"`
+        """
+        await self.statushydra(ctx, "solvedish", answer)
+
+    @command_predicates.is_solver()
+    @commands.command(name="unsolvedhydra")
+    async def unsolvedhydra(self, ctx: commands.Context, answer: str = ""):
+        """Sets the puzzle to in progress and updates the sheet and channel name accordingly.
+        Clears the solved time on the Overview sheet.
+
+        Permission Category : Solver Roles only.
+        Usage: `~unsolvedhydra` (Removes the answer from the sheet)
+        Usage: `~unsolvedhydra "answer"` (Updates the answer from the sheet to "answer")
+        """
+        await self.statushydra(ctx, "In Progress", answer)
 
     @command_predicates.is_solver()
     @commands.command(name="slainhydra", aliases=["donehydra"])
-    async def slainhydra(self, ctx, *answer):
+    async def slainhydra(self, ctx: commands.Context, *answer):
         """Runs `~solvedhydra` "ANSWER" then `~mtahydra`.
 
         Permission Category : Solver Roles only.
@@ -1043,10 +1385,6 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~slainhydra ANSWER`
         Usage: `~slainhydra "A MULTIWORD ANSWER"`
         """
-        await logging_utils.log_command(
-            "slainhydra", ctx.guild, ctx.channel, ctx.author
-        )
-
         solvedhydra = self.bot.get_command("solvedhydra")
         mtahydra = self.bot.get_command("mtahydra")
 
@@ -1055,7 +1393,7 @@ class HydraCog(commands.Cog, name="Hydra"):
 
     @command_predicates.is_solver()
     @commands.command(name="backslainhydra")
-    async def backslainhydra(self, ctx, *answer):
+    async def backslainhydra(self, ctx: commands.Context, *answer):
         """Runs `~backsolvedhydra` "ANSWER" then `~mtahydra`.
 
         Permission Category : Solver Roles only.
@@ -1063,10 +1401,6 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~backslainhydra ANSWER`
         Usage: `~backslainhydra "A MULTIWORD ANSWER"`
         """
-        await logging_utils.log_command(
-            "backslainhydra", ctx.guild, ctx.channel, ctx.author
-        )
-
         backsolvedhydra = self.bot.get_command("backsolvedhydra")
         mtahydra = self.bot.get_command("mtahydra")
 
@@ -1083,14 +1417,18 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~unmtahydra`
         Usage: `~unmtahydra "Main Hunt Category Name"` (If I cannot find the main hunt category automatically)
         """
-        await logging_utils.log_command(
-            "unmtahydra", ctx.guild, ctx.channel, ctx.author
-        )
+        # Type guard: ensure we're in a guild text channel
+        if not isinstance(ctx.channel, nextcord.TextChannel):
+            embed = hydra_helpers.create_failure_embed(
+                "This command can only be used in a guild (server) text channel."
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
 
         base = SheetCommandBase(ctx, self.gspread_client)
         curr_sheet_link, overview_sheet, row_to_find = await base.get_sheet_context()
 
-        if overview_sheet is None:
+        if overview_sheet is None or row_to_find is None:
             return
 
         embed = discord_utils.create_embed()
@@ -1101,19 +1439,15 @@ class HydraCog(commands.Cog, name="Hydra"):
             _, col_idx = gspread.utils.a1_to_rowcol(sheet_tab_id_col + "1")
             sheet_tab_id = overview_values[row_to_find - 1][col_idx - 1]
         except Exception:
-            embed.add_field(
-                name="Failed",
-                value=f"Could not find the Sheet Tab ID for channel {ctx.message.channel.mention} in the Overview sheet.",
-                inline=False,
+            embed = hydra_helpers.create_failure_embed(
+                f"Could not find the Sheet Tab ID for channel {ctx.channel.mention} in the Overview sheet."
             )
             await discord_utils.send_message(ctx, embed)
             return
 
         if ctx.channel.category is None:
-            embed.add_field(
-                name="Failed",
-                value=f"The channel {ctx.message.channel.mention} is not in a category.",
-                inline=False,
+            embed = hydra_helpers.create_failure_embed(
+                f"The channel {ctx.channel.mention} is not in a category."
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -1122,23 +1456,50 @@ class HydraCog(commands.Cog, name="Hydra"):
         # same sheet. If that fails, we get the current category's name, and remove "Archive" and look for that. Else, we will
         # just ask the user for the category name.
 
+        if ctx.guild is None:
+            embed = hydra_helpers.create_failure_embed(
+                "This command must be used in a guild (server)."
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
         main_category = None
+        full_categories = [
+            category
+            for category in ctx.guild.categories
+            if discord_utils.category_is_full(category)
+        ]
 
         if category_name != "":
             main_category = await discord_utils.find_category(ctx, category_name)
             if main_category is None:
-                embed.add_field(
-                    name="Failed",
-                    value=f"I cannot find category `{category_name}`. Perhaps check your spelling and try again.",
+                embed = hydra_helpers.create_failure_embed(
+                    f"I cannot find category `{category_name}`. Perhaps check your spelling and try again."
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+            elif main_category in full_categories:
+                embed = hydra_helpers.create_failure_embed(
+                    f"The category `{category_name}` is full. Please specify a different category."
                 )
                 await discord_utils.send_message(ctx, embed)
                 return
 
         if main_category is None:
+            if ctx.guild is None:
+                embed = hydra_helpers.create_failure_embed(
+                    "This command must be used in a guild (server)."
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+
             for category in ctx.guild.categories:
-                if category.id == ctx.channel.category.id:
-                    continue  # Skip current category
-                cat_result, _ = sheet_utils.findsheettether(category.id, None)
+                if (
+                    category.id == ctx.channel.category.id
+                    or category in full_categories
+                ):
+                    continue  # Skip current category / full categories
+                cat_result, _ = sheet_utils.findsheettether(category.id, 0)
                 if (
                     cat_result is not None
                     and str(cat_result.sheet_link) == curr_sheet_link
@@ -1156,17 +1517,22 @@ class HydraCog(commands.Cog, name="Hydra"):
             ]
 
             possible_solving_categories = []
-            # Look for categories that begin with the exact base name, then the bas name minus last word, etc.
+            # Look for categories that begin with the exact base name, then the base name minus last word, etc.
             for possible_base_name in possible_category_prefixes:
                 to_add_candidates = [
                     category
                     for category in ctx.guild.categories
                     if category.name.startswith(possible_base_name)
-                    and not re.match(r".*Archive\s*\d*$", category.name)
+                    and (not re.match(r".*Archive\s*\d*$", category.name))
+                    and (category not in full_categories)
                 ]
 
                 for candidate in to_add_candidates:
-                    if candidate not in possible_solving_categories:
+                    # Skip categories that are full, prefer ones with space
+                    if (
+                        candidate not in possible_solving_categories
+                        and not discord_utils.category_is_full(candidate)
+                    ):
                         possible_solving_categories.append(candidate)
 
             if len(possible_solving_categories) == 1:
@@ -1185,10 +1551,9 @@ class HydraCog(commands.Cog, name="Hydra"):
                 return
 
         if main_category is None:
-            embed.add_field(
-                name="Failed",
-                value="I could not automatically find the main hunt category. \n"
-                "Please specify the main hunt category name as an argument.",
+            embed = hydra_helpers.create_failure_embed(
+                "I could not automatically find the main hunt category. \n"
+                "Please specify the main hunt category name as an argument."
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -1197,39 +1562,44 @@ class HydraCog(commands.Cog, name="Hydra"):
         channel_embed = discord_utils.create_embed()
         try:
             await ctx.channel.edit(category=main_category)
-            channel_embed.add_field(
-                name="Success",
-                value=f"Successfully moved channel {ctx.channel.mention} to category `{main_category.name}`.",
-                inline=False,
+            channel_embed = hydra_helpers.create_success_embed(
+                f"Successfully moved channel {ctx.channel.mention} to category `{main_category.name}`."
             )
             await discord_utils.send_message(ctx, channel_embed)
         except nextcord.Forbidden:
-            channel_embed.add_field(
-                name="Failed",
-                value=f"I do not have permission to move the channel {ctx.channel.mention} to category `{main_category.name}`.",
-                inline=False,
+            channel_embed = hydra_helpers.create_failure_embed(
+                f"I do not have permission to move the channel {ctx.channel.mention} to category `{main_category.name}`."
             )
             await discord_utils.send_message(ctx, channel_embed)
             return
         except Exception as e:
-            channel_embed.add_field(
-                name="Failed",
-                value=f"Could not move channel {ctx.channel.mention} to category `{main_category.name}`. Error: {str(e)}",
-                inline=False,
+            channel_embed = hydra_helpers.create_failure_embed(
+                f"Could not move channel {ctx.channel.mention} to category `{main_category.name}`. Error: {str(e)}"
             )
             await discord_utils.send_message(ctx, channel_embed)
             return
 
         # Move the sheet tab into the active section
         tab_embed = discord_utils.create_embed()
+
+        # Type check for curr_sheet_link
+        if curr_sheet_link is None:
+            tab_embed = hydra_helpers.create_failure_embed("Could not find sheet link.")
+            await discord_utils.send_message(ctx, tab_embed)
+            return
+
         try:
-            curr_sheet = self.gspread_client.open_by_url(curr_sheet_link)
+            curr_sheet = (
+                overview_sheet.spreadsheet
+                if overview_sheet is not None
+                else self.gspread_client.open_by_url(curr_sheet_link)
+            )
 
             # Find index by looking for last occurrence of a sheet ending with "Template".
-
+            all_sheets = curr_sheet.worksheets()
             template_index = 0
             found_template = False
-            for sheet in curr_sheet.worksheets():
+            for sheet in all_sheets:
                 if sheet.title.endswith("Template"):
                     template_index = sheet.index
                     found_template = True
@@ -1240,25 +1610,362 @@ class HydraCog(commands.Cog, name="Hydra"):
             if not found_template:
                 template_index = 0  # Move to start if no templates found
 
-            tab_to_move = curr_sheet.get_worksheet_by_id(int(sheet_tab_id))
-            tab_to_move.update_index(template_index + 1)  # Move to after last template
-            tab_embed.add_field(
-                name="Success",
-                value=f"Successfully moved the sheet tab for {ctx.channel.mention} to the active section.",
-                inline=False,
+            # Use batch update to move the sheet
+            curr_sheet.batch_update(
+                {
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": int(sheet_tab_id),
+                                    "index": template_index + 1,
+                                },
+                                "fields": "index",
+                            }
+                        }
+                    ]
+                }
+            )
+            tab_embed = hydra_helpers.create_success_embed(
+                f"Successfully moved the sheet tab for {ctx.channel.mention} to the active section."
             )
             await discord_utils.send_message(ctx, tab_embed)
         except gspread.exceptions.APIError as e:
             await hydra_helpers.handle_gspread_error(ctx, e, tab_embed)
             return
         except Exception as e:
-            tab_embed.add_field(
-                name="Failed",
-                value=f"Unknown error when moving tab: `{str(e)}`",
-                inline=False,
+            tab_embed = hydra_helpers.create_failure_embed(
+                f"Unknown error when moving tab: `{str(e)}`"
             )
             await discord_utils.send_message(ctx, tab_embed)
             return
+
+    @command_predicates.is_trusted()
+    @commands.command(name="summaryallowhydra")
+    async def summaryallowhydra(
+        self,
+        ctx: commands.Context,
+        role_or_rolename: Union[nextcord.Role, str],
+        chan_or_channame: Optional[Union[nextcord.TextChannel, str]] = None,
+    ):
+        """Allows a role to run `~catsummaryhydra` and `~watchcategoryhydra` in a channel.
+        If no channel is given, uses the current channel.
+        Note: The category permissions must explicitly allow the role to view the channel.
+
+        Permission Category : Trusted roles only.
+        Usage: `~summaryallowhydra @role #channel`
+        Usage: `~summaryallowhydra @role`
+        """
+        if chan_or_channame is None:
+            chan_or_channame = ctx.channel
+
+        role = await discord_utils.find_role(ctx, role_or_rolename)
+        if role is None:
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't find role `{role_or_rolename}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        if role.is_default():
+            embed = hydra_helpers.create_failure_embed(
+                "Summaries can't be allowed for `@everyone`. Please pick a specific role."
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        channel = await discord_utils.find_chan_or_thread(ctx, chan_or_channame)
+        if not isinstance(channel, nextcord.TextChannel):
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't find channel `{chan_or_channame}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        grant_id = f"{channel.id}_{role.id}"
+        with Session(database.DATABASE_ENGINE) as session:
+            result = (
+                session.query(database.SummaryGrants)
+                .filter_by(channel_id_role_id=grant_id)
+                .first()
+            )
+            if result is not None:
+                embed = hydra_helpers.create_failure_embed(
+                    f"{role.mention} is already allowed in {channel.mention}"
+                )
+                await discord_utils.send_message(ctx, embed)
+                return
+
+            statement = sqlalchemy.insert(database.SummaryGrants).values(
+                server_id=ctx.guild.id,
+                server_name=ctx.guild.name,
+                channel_id=channel.id,
+                channel_name=channel.name,
+                role_id=role.id,
+                role_name=role.name,
+                channel_id_role_id=grant_id,
+            )
+            session.execute(statement)
+            session.commit()
+
+        embed = hydra_helpers.create_success_embed(
+            f"{role.mention} can now run summaries in {channel.mention}."
+        )
+        await discord_utils.send_message(ctx, embed)
+
+    @command_predicates.is_trusted()
+    @commands.command(name="summarydisallowhydra")
+    async def summarydisallowhydra(
+        self,
+        ctx: commands.Context,
+        role_or_rolename: Union[nextcord.Role, str],
+        chan_or_channame: Union[nextcord.TextChannel, str],
+    ):
+        """Removes a role's permission to run summaries in a channel.
+
+        Permission Category : Trusted Roles only.
+        Usage: `~summarydisallowhydra @role #channel`
+        """
+        role = await discord_utils.find_role(ctx, role_or_rolename)
+        if role is None:
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't find role `{role_or_rolename}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        channel = await discord_utils.find_chan_or_thread(ctx, chan_or_channame)
+        if not isinstance(channel, nextcord.TextChannel):
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't find text channel `{chan_or_channame}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        with Session(database.DATABASE_ENGINE) as session:
+            deleted = (
+                session.query(database.SummaryGrants)
+                .filter_by(channel_id_role_id=f"{channel.id}_{role.id}")
+                .delete()
+            )
+            session.commit()
+
+        if not deleted:
+            embed = hydra_helpers.create_failure_embed(
+                f"{role.mention} isn't allowed in {channel.mention}, so there's nothing to remove."
+            )
+        else:
+            embed = hydra_helpers.create_success_embed(
+                f"{role.mention} can no longer run summaries in {channel.mention}"
+            )
+        await discord_utils.send_message(ctx, embed)
+
+    @command_predicates.is_trusted()
+    @commands.command(name="summarylisthydra")
+    async def summarylisthydra(self, ctx: commands.Context):
+        """Sends the list of roles allowed to run summaries in this server and where. Be careful where you call
+        this!
+
+        Permission Category : Trusted Roles only.
+        Usage: `~summarylisthydra`
+        """
+        with Session(database.DATABASE_ENGINE) as session:
+            rows = (
+                session.query(database.SummaryGrants)
+                .filter_by(server_id=ctx.guild.id)
+                .all()
+            )
+            grants = [
+                (row.role_id, row.role_name, row.channel_id, row.channel_name)
+                for row in rows
+            ]
+
+        lines = []
+        for role_id, role_name, channel_id, channel_name in grants:
+            role = ctx.guild.get_role(role_id)
+            channel = ctx.guild.get_channel(channel_id)
+            role_text = f"@{role.name}" if role else f"@{role_name} (deleted)"
+            channel_text = (
+                f"#{channel.name}" if channel else f"#{channel_name} (deleted)"
+            )
+            lines.append(f"- {role_text} in {channel_text}")
+
+        embed = discord_utils.create_embed()
+        embed.add_field(
+            name=f"Summary grants for {ctx.guild.name}",
+            value="\n".join(lines) if lines else "No summary grants found.",
+            inline=False,
+        )
+
+        await discord_utils.send_message(ctx, embed)
+
+    @command_predicates.is_trusted()
+    @commands.command(
+        name="addupdateshydra", aliases=["updateshydra", "addupdatehydra"]
+    )
+    async def addupdateshydra(
+        self,
+        ctx: commands.Context,
+        channel: Optional[nextcord.TextChannel] = None,
+        *sheet_links: str,
+    ):
+        """Posts updates (most importantly puzzle solves) to a channel every time a puzzle is solved on the linked sheets.
+        If no channel is given, defaults to the current channel.
+        If no sheet links are given, defaults to the tethered sheet of the category.
+
+        Permission Category : Trusted Roles only.
+        Usage: `~addupdateshydra #solve-stream` (from a channel whose category has a tethered sheet)
+        Usage: `~addupdateshydra #solve-stream <sheet_link_1> <sheet_link_2> ...`
+        Usage: `~addupdateshydra <sheet_link>` (from the channel to post in)
+        """
+
+        if channel is None:
+            channel = ctx.channel
+
+        if not isinstance(channel, nextcord.TextChannel):
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't find text channel `{channel}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        sheet_keys, bad_links, err_embed = hydra_helpers.get_sheet_keys(
+            ctx, sheet_links
+        )
+        if err_embed is not None:
+            await discord_utils.send_message(ctx, err_embed)
+            return
+
+        # now we have valid sheets and valid channel!
+
+        # Only keep sheets the bot can open now
+        open_keys = []
+        unopened_keys = []
+        for sheet_key in sheet_keys:
+            if sheet_utils.get_sheet_from_key_or_link(self.gspread_client, sheet_key):
+                open_keys.append(sheet_key)
+            else:
+                unopened_keys.append(sheet_key)
+
+        lines = []
+        with Session(database.DATABASE_ENGINE) as session:
+            for sheet_key in open_keys:
+                # Deletes then inserts any existing solve stream for this sheet in this channel.
+                # So essentially, no duplicates.
+                existed = (
+                    session.query(database.SolveStreams)
+                    .filter_by(sheet_key=sheet_key, channel_id=channel.id)
+                    .delete()
+                )
+                stmt = sqlalchemy.insert(database.SolveStreams).values(
+                    server_id=ctx.guild.id,
+                    server_name=ctx.guild.name,
+                    channel_id=channel.id,
+                    channel_name=channel.name,
+                    sheet_key=sheet_key,
+                )
+                session.execute(stmt)
+                sheet_text = (
+                    f"[Sheet](https://docs.google.com/spreadsheets/d/{sheet_key})"
+                )
+                if existed:
+                    lines.append(
+                        f"{sheet_text}: solves were already being posted to {channel.mention}."
+                    )
+                else:
+                    lines.append(
+                        f"{sheet_text}: solves will now be posted to {channel.mention}."
+                    )
+            session.commit()
+
+        for sheet_key in unopened_keys:
+            lines.append(
+                f"`{sheet_key}`: **Failed** - I can't find that sheet. Are you sure the link is a valid sheet with "
+                "permissions set to 'Anyone with the link can edit'?"
+            )
+
+        for link in bad_links:
+            lines.append(f"`{link}`: **Failed** - invalid sheet link.")
+
+        embed = discord_utils.create_embed()
+        embed.add_field(
+            name=f"Solve streams to {channel.name}",
+            value="\n".join(lines),
+            inline=False,
+        )
+        await discord_utils.send_message(ctx, embed)
+
+    @command_predicates.is_trusted()
+    @commands.command(
+        name="rmupdatehydra",
+        aliases=[
+            "removeupdatehydra",
+            "removeupdateshydra",
+            "rmupdateshydra",
+        ],
+    )
+    async def rmupdateshydra(
+        self,
+        ctx: commands.Context,
+        channel: Optional[nextcord.TextChannel] = None,
+        *sheet_links: str,
+    ):
+        """Removes solve streams for the given sheets from a channel.
+        If no channel is given, defaults to the current channel.
+        If no sheets are given, defaults to the one tethered to the category.
+
+        Permission Category : Trusted Roles only.
+        Usage: `~rmupdatehydra #solve-stream` (from a channel whose category has a tethered sheet)
+        Usage: `~rmupdatehydra <sheet_link_1> <sheet_link_2> ...` (from any channel)
+        """
+        if channel is None:
+            channel = ctx.channel
+
+        if not isinstance(channel, nextcord.TextChannel):
+            embed = hydra_helpers.create_failure_embed(
+                f"I couldn't find text channel `{channel}`"
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
+
+        sheet_keys, bad_links, err_embed = hydra_helpers.get_sheet_keys(
+            ctx, sheet_links
+        )
+        if err_embed is not None:
+            await discord_utils.send_message(ctx, err_embed)
+            return
+
+        lines = []
+        with Session(database.DATABASE_ENGINE) as session:
+            for sheet_key in sheet_keys:
+                deleted = (
+                    session.query(database.SolveStreams)
+                    .filter_by(sheet_key=sheet_key, channel_id=channel.id)
+                    .delete()
+                )
+                sheet_text = (
+                    f"[Sheet](https://docs.google.com/spreadsheets/d/{sheet_key})"
+                )
+                if deleted:
+                    lines.append(
+                        f"{sheet_text}: solves will no longer be posted to {channel.mention}."
+                    )
+                else:
+                    lines.append(
+                        f"{sheet_text}: **Failed** - solves on this sheet aren't being posted to {channel.mention}."
+                    )
+            session.commit()
+
+        for link in bad_links:
+            lines.append(f"`{link}`: **Failed** - invalid sheet link.")
+
+        embed = discord_utils.create_embed()
+        embed.add_field(
+            name=f"Removed solve streams from {channel.name}",
+            value="\n".join(lines),
+            inline=False,
+        )
+        await discord_utils.send_message(ctx, embed)
 
 
 def setup(bot):

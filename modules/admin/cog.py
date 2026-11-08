@@ -4,7 +4,7 @@ import database
 import constants
 from nextcord.ext import commands
 from sqlalchemy.orm import Session
-from utils import discord_utils, logging_utils, command_predicates
+from utils import discord_utils, command_predicates
 from database import models
 from typing import Union
 
@@ -31,7 +31,10 @@ class AdminCog(commands.Cog, name="Admin"):
         name="addperm", aliases=["addverifieds", "addverified", "addperms"]
     )
     async def addperm(
-        self, ctx, role_permissions: str, role_or_rolename: Union[nextcord.Role, str]
+        self,
+        ctx: commands.Context,
+        role_permissions: str,
+        role_or_rolename: Union[nextcord.Role, str],
     ):
         """Add a new Permission Category for a given role on this server. Only available to server admins or bot owners.
 
@@ -44,7 +47,6 @@ class AdminCog(commands.Cog, name="Admin"):
         Usage: `~addperm Verified @VerifiedRoleName`
         Usage: `~addperm Trusted @everyone`
         """
-        await logging_utils.log_command("addperm", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if role_permissions not in database.VERIFIED_CATEGORIES:
@@ -135,7 +137,7 @@ class AdminCog(commands.Cog, name="Admin"):
             "lsperm",
         ],
     )
-    async def listperm(self, ctx, role_permissions: str):
+    async def listperm(self, ctx: commands.Context, role_permissions: str):
         """List all roles in the given Permission Category within the server.
 
         See also: `~addperms`
@@ -143,7 +145,6 @@ class AdminCog(commands.Cog, name="Admin"):
         Permission Category : Admin or Bot Owner Roles only.
         Usage: `~listperm Verified`
         """
-        await logging_utils.log_command("listperm", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         if role_permissions not in database.VERIFIED_CATEGORIES:
@@ -186,7 +187,10 @@ class AdminCog(commands.Cog, name="Admin"):
         aliases=["removeperms", "rmperms", "rmverified", "rmperm"],
     )
     async def removeperm(
-        self, ctx, role_permissions: str, role_or_rolename: Union[nextcord.Role, str]
+        self,
+        ctx: commands.Context,
+        role_permissions: str,
+        role_or_rolename: Union[nextcord.Role, str],
     ):
         """Remove a role from the given Permission Category within the server.
         Only available to server admins or bot owners.
@@ -195,9 +199,6 @@ class AdminCog(commands.Cog, name="Admin"):
         Usage: `~removeperm Verified @VerifiedRoleName`
         Usage: `~removeperm Trusted @everyone`
         """
-        await logging_utils.log_command(
-            "removeperm", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if role_permissions not in database.VERIFIED_CATEGORIES:
@@ -280,11 +281,11 @@ class AdminCog(commands.Cog, name="Admin"):
     @command_predicates.is_bot_owner()
     @commands.command(
         name="commonmemberguilds",
-        aliases=["commonguild", "guildcommon"],
+        aliases=["commonguild", "guildcommon", "commonguildmembers"],
     )
     async def commonmemberguilds(
         self,
-        ctx,
+        ctx: commands.Context,
         guild_1: Union[nextcord.Guild, str],
         guild_2: Union[nextcord.Guild, str],
     ):
@@ -294,9 +295,6 @@ class AdminCog(commands.Cog, name="Admin"):
         See also : `~lsguilds`
         Usage: `~commonmemberguilds "Guild1" "Guild2"`
         """
-        await logging_utils.log_command(
-            "commonmemberguilds", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         guild_1_guild = await discord_utils.find_guild(ctx, guild_1)
@@ -322,15 +320,24 @@ class AdminCog(commands.Cog, name="Admin"):
         members_guild_1 = guild_1_guild.members
         members_guild_2 = guild_2_guild.members
 
+        # Skip the bot or "No members in common" will never be reached
         members_common = [
-            member for member in members_guild_1 if member in members_guild_2
+            member
+            for member in members_guild_1
+            if member in members_guild_2 and member != ctx.bot.user
         ]
 
         if len(members_common) > 0:
+            members_string = " ".join(
+                [
+                    f"{member.mention} - `@{member.name}` \n "
+                    for member in members_common
+                ]
+            )
             embed.add_field(
                 name="Members common",
                 value=f"Members common in `{guild_1}` and `{guild_2}`\n"
-                f"{' '.join([member.mention for member in members_common])}",
+                f"{members_string}",
                 inline=False,
             )
         else:
@@ -348,7 +355,7 @@ class AdminCog(commands.Cog, name="Admin"):
     )
     async def guildowner(
         self,
-        ctx,
+        ctx: commands.Context,
         guild_name: Union[nextcord.Guild, str],
     ):
         """Mentions the guild owner for a specific guild the bot is in.
@@ -358,9 +365,6 @@ class AdminCog(commands.Cog, name="Admin"):
         Permission Category : Bot Owner Roles only.
         Usage: `~guildowner "Guild1"`
         """
-        await logging_utils.log_command(
-            "guildowner", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         guild = await discord_utils.find_guild(ctx, guild_name)
@@ -386,20 +390,24 @@ class AdminCog(commands.Cog, name="Admin"):
         name="lsguilds",
         aliases=["listguilds"],
     )
-    async def lsguilds(self, ctx):
-        """List all guilds that the bot is in.
+    async def lsguilds(self, ctx: commands.Context):
+        """List all guilds that the bot is in, with their owners.
 
         Permission Category : Bot Owner Roles only.
         Usage: `~lsguilds`
         """
-        await logging_utils.log_command("lsguilds", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         guilds = ctx.bot.guilds
         guilds = sorted(guilds, key=lambda guild: guild.name)
 
         if len(guilds) > 0:
-            guilds_string = " ".join(["`" + guild.name + "` - \n" for guild in guilds])
+            guilds_string = " ".join(
+                [
+                    f"`{guild.name}` - `@{guild.owner.name if guild.owner else guild.owner_id}` \n"
+                    for guild in guilds
+                ]
+            )
             embed.add_field(
                 name=f"Guilds for {ctx.bot.user.name} = {len(guilds)}",
                 value=f"Guilds for {ctx.bot.user.mention}\n{guilds_string}",
@@ -417,13 +425,14 @@ class AdminCog(commands.Cog, name="Admin"):
     @commands.command(
         name="quitguild",
     )
-    async def quitguild(self, ctx, guild_name: Union[nextcord.Guild, str]):
+    async def quitguild(
+        self, ctx: commands.Context, guild_name: Union[nextcord.Guild, str]
+    ):
         """Quit a guild.
 
         Permission Category : Bot Owner Roles only.
         Usage: `~quitguild "Guildname"`
         """
-        await logging_utils.log_command("quitguild", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         guild = await discord_utils.find_guild(ctx, guild_name)
@@ -456,13 +465,12 @@ class AdminCog(commands.Cog, name="Admin"):
 
     @command_predicates.is_bot_owner_or_admin()
     @commands.command(name="setprefix")
-    async def setprefix(self, ctx, prefix: str):
+    async def setprefix(self, ctx: commands.Context, prefix: str):
         """Sets the bot prefix for the server.
 
         Permission Category : Admin or Bot Owner Roles only.
         Usage: `~setprefix !`
         """
-        await logging_utils.log_command("setprefix", ctx.guild, ctx.channel, ctx.author)
         embed = discord_utils.create_embed()
 
         with Session(database.DATABASE_ENGINE) as session:
@@ -486,15 +494,12 @@ class AdminCog(commands.Cog, name="Admin"):
     @commands.command(
         name="reloaddatabasecache", aliases=["reloaddbcache", "dbcachereload"]
     )
-    async def reloaddatabasecache(self, ctx):
+    async def reloaddatabasecache(self, ctx: commands.Context):
         """Reloads the custom command cache. This is useful when we're editing commands or playing with the Database.
 
         Permission Category : Admin or Bot Owner Roles only.
         Usage: `~reloaddatabasecache`
         """
-        await logging_utils.log_command(
-            "reloaddatabasecache", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # Reset custom commands, verifieds, and prefixes for that server
@@ -515,7 +520,11 @@ class AdminCog(commands.Cog, name="Admin"):
                     # Populate custom command dict
                     database.CUSTOM_COMMANDS[ctx.guild.id][
                         custom_command.command_name.lower()
-                    ] = (custom_command.command_return, custom_command.image)
+                    ] = (
+                        custom_command.command_return,
+                        custom_command.image,
+                        custom_command.responses,
+                    )
             embed.add_field(
                 name="Success",
                 value="Successfully reloaded command cache.",

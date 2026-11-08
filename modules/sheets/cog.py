@@ -43,7 +43,7 @@ class SheetsCog(commands.Cog, name="Sheets"):
         name="addtether",
         aliases=["editsheettether", "tether", "edittether", "addsheettether"],
     )
-    async def addsheettether(self, ctx, sheet_key_or_link: str):
+    async def addsheettether(self, ctx: commands.Context, sheet_key_or_link: str):
         """Tethers a sheet to the current category.
 
         For any Google sheets commands, a tether to either category or channel (See `~chantether`) is necessary.
@@ -53,9 +53,6 @@ class SheetsCog(commands.Cog, name="Sheets"):
         Permission Category : Solver Roles only.
         Usage : `~tether SheetLink`
         """
-        await logging_utils.log_command(
-            "addsheettether", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if ctx.channel.category is None:
@@ -104,7 +101,9 @@ class SheetsCog(commands.Cog, name="Sheets"):
             "threadtether",
         ],
     )
-    async def addchannelsheettether(self, ctx, sheet_key_or_link: str):
+    async def addchannelsheettether(
+        self, ctx: commands.Context, sheet_key_or_link: str
+    ):
         """Tethers a sheet to the current channel/thread
 
         For any Google sheets commands, a tether to either category (See `~tether`) or channel is necessary.
@@ -114,9 +113,6 @@ class SheetsCog(commands.Cog, name="Sheets"):
         Permission Category : Solver Roles only.
         Usage : `~chantether SheetLink`
         """
-        await logging_utils.log_command(
-            "addchannelsheettether", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         proposed_sheet = sheet_utils.addsheettethergeneric(
@@ -153,7 +149,7 @@ class SheetsCog(commands.Cog, name="Sheets"):
             "deltetherhydra",
         ],
     )
-    async def removesheettether(self, ctx):
+    async def removesheettether(self, ctx: commands.Context):
         """Remove the Category or Channel tethering to the sheet.
 
         If a channel tether and a category tether both exist, the channel tether will always be removed first.
@@ -162,16 +158,13 @@ class SheetsCog(commands.Cog, name="Sheets"):
         Permission Category : Solver Roles only.
         Usage : `~removetether`
         """
-        await logging_utils.log_command(
-            "removesheettether", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # Get category and channel information
-        curr_cat = ctx.message.channel.category.name
-        curr_cat_id = str(ctx.message.channel.category_id)
+        curr_cat = ctx.message.channel.category
+        curr_cat_id = ctx.message.channel.category_id
         curr_chan = ctx.message.channel
-        curr_chan_id = str(ctx.message.channel.id)
+        curr_chan_id = ctx.message.channel.id
 
         curr_thread_id = None
         if await discord_utils.is_thread(ctx, curr_chan):
@@ -222,6 +215,14 @@ class SheetsCog(commands.Cog, name="Sheets"):
                     inline=False,
                 )
             await discord_utils.send_message(ctx, embed)
+        elif curr_cat is None:
+            embed.add_field(
+                name="Failed",
+                value=f"The channel {curr_chan.mention} is not tethered to any Google sheet.",
+                inline=False,
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
         else:
             embed.add_field(
                 name="Failed",
@@ -236,7 +237,7 @@ class SheetsCog(commands.Cog, name="Sheets"):
     @commands.command(
         name="prunetethers",
     )
-    async def prunetethers(self, ctx):
+    async def prunetethers(self, ctx: commands.Context):
         """Remove all tethers from channels that no longer exist
 
         See also : ~addtether
@@ -244,9 +245,6 @@ class SheetsCog(commands.Cog, name="Sheets"):
         Permission Category : Owner or Admin only
         Usage : `~prunetethers`
         """
-        await logging_utils.log_command(
-            "prunetethers", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         to_delete = await self.prune_tethers()
@@ -263,21 +261,18 @@ class SheetsCog(commands.Cog, name="Sheets"):
         name="showtether",
         aliases=["showsheettether", "displaysheettether", "displaytether"],
     )
-    async def displaysheettether(self, ctx):
+    async def displaysheettether(self, ctx: commands.Context):
         """Find the sheet the category is current tethered too
 
         Permission Category : Solver Roles only.
         Usage : `~showtether`
         """
-        await logging_utils.log_command(
-            "displaysheettether", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
-        curr_cat = ctx.message.channel.category.name
-        curr_cat_id = str(ctx.message.channel.category_id)
+        curr_cat = ctx.message.channel.category
+        curr_cat_id = ctx.message.channel.category_id
         curr_chan = ctx.message.channel
-        curr_chan_id = str(ctx.message.channel.id)
+        curr_chan_id = ctx.message.channel.id
 
         curr_thread_id = None
         if await discord_utils.is_thread(ctx, curr_chan):
@@ -326,6 +321,14 @@ class SheetsCog(commands.Cog, name="Sheets"):
                     inline=False,
                 )
             await discord_utils.send_message(ctx, embed)
+        elif curr_cat is None:
+            embed.add_field(
+                name="Failed",
+                value=f"The channel {curr_chan.mention} is not tethered to any Google sheet.",
+                inline=False,
+            )
+            await discord_utils.send_message(ctx, embed)
+            return
         else:
             embed.add_field(
                 name="Failed",
@@ -338,16 +341,13 @@ class SheetsCog(commands.Cog, name="Sheets"):
 
     @command_predicates.is_solver()
     @commands.command(name="downloadsheet", aliases=["savesheet"])
-    async def downloadsheet(self, ctx, sheet_url=None):
+    async def downloadsheet(self, ctx: commands.Context, sheet_url=None):
         """Download the channel/category's currently tethered sheet. You can supply a URL or it will
         use the currently tethered sheet.
 
         Permission Category : Solver Roles only.
         Usage: `~savesheet`
         """
-        await logging_utils.log_command(
-            "downloadsheet", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         http = self.gdrive_credentials.authorize(httplib2.Http())
@@ -446,7 +446,7 @@ class SheetsCog(commands.Cog, name="Sheets"):
                     if chan not in chan_cat_threads_id:
                         to_delete.append((serv, chan))
 
-        print(
+        logging_utils.print_with_timestamp(
             "Server not in bot for these channels... Probably running the test version of the bot"
         )
         print(list(not_in_server))

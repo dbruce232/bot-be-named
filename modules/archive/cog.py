@@ -11,7 +11,7 @@ from nextcord.ext import commands
 
 import constants
 from modules.archive import archive_constants, archive_utils
-from utils import command_predicates, discord_utils, logging_utils
+from utils import command_predicates, discord_utils
 
 """
 Archive module. Downloads a channel's history and sends it as a file
@@ -199,16 +199,15 @@ class ArchiveCog(commands.Cog, name="Archive"):
 
     @command_predicates.is_verified()
     @commands.command(name="archivechannel", aliases=["archivechan", "archivethread"])
-    async def archivechannel(self, ctx, *args: Union[nextcord.TextChannel, str]):
+    async def archivechannel(
+        self, ctx: commands.Context, *args: Union[nextcord.TextChannel, str]
+    ):
         """Command to download channel's history
 
         Permission Category : Verified Roles only.
         Usage: `~archivechannel #channel`
         Usage: `~archivechannel #channel1 "channel2"`
         """
-        await logging_utils.log_command(
-            "archivechannel", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # Check if the user supplied a channel
@@ -309,15 +308,12 @@ class ArchiveCog(commands.Cog, name="Archive"):
 
     @command_predicates.is_verified()
     @commands.command(name="archivecategory", aliases=["archivecat"])
-    async def archivecategory(self, ctx, *args: str):
+    async def archivecategory(self, ctx: commands.Context, *args: str):
         """Command to download the history of every text channel in the category
 
         Permission Category : Verified Roles only.
         Usage: `~archivecategory "Category name"`
         """
-        await logging_utils.log_command(
-            "archivecategory", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # Check if the user supplied a category
@@ -407,16 +403,13 @@ class ArchiveCog(commands.Cog, name="Archive"):
 
     @command_predicates.is_bot_owner_or_admin()
     @commands.command(name="archiveserver")
-    async def archiveserver(self, ctx):
+    async def archiveserver(self, ctx: commands.Context):
         """Command to archive every text channel in the server. WARNING: This command will take *very*
         long on any reasonably aged server
 
         Permission Category : Admin or Bot Owner Roles only.
         Usage: `~archiveserver`
         """
-        await logging_utils.log_command(
-            "archiveserver", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # If we don't have the lock, let the user know it may take a while.

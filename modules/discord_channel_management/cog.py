@@ -3,7 +3,7 @@ import asyncio
 from typing import Union
 from utils import sheets_constants
 from nextcord.ext import commands
-from utils import discord_utils, logging_utils, command_predicates
+from utils import discord_utils, command_predicates
 
 """
 Discord Channel management module. Bundle of all discord functions and commands related to managing a specific discord channel and managing it.
@@ -27,7 +27,10 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     @command_predicates.is_verified()
     @commands.command(name="movechan", aliases=["movechannel"])
     async def movechannel(
-        self, ctx, category_name: str, *args: Union[nextcord.TextChannel, str]
+        self,
+        ctx: commands.Context,
+        category_name: str,
+        *args: Union[nextcord.TextChannel, str],
     ):
         """Command to move channels to category with given name
 
@@ -38,9 +41,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
         Note that channels may be mentioned or named, but a channel is named "all", then it must be mentioned to avoid issues.
         """
-        await logging_utils.log_command(
-            "movechannel", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # get current channel
@@ -86,7 +86,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         ]
         channels_to_move = list(set(channels_to_move))
 
-        # Identify channels aready in category
+        # Identify channels already in category
         channels_already_in_category = [
             chan for chan in channels_to_move if chan.category == new_category
         ]
@@ -226,7 +226,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     @commands.command(name="renamechan", aliases=["renamechannel", "renamethread"])
     async def renamechannel(
         self,
-        ctx,
+        ctx: commands.Context,
         chan_a: Union[nextcord.TextChannel, nextcord.Thread, str],
         chan_b: Union[nextcord.TextChannel, nextcord.Thread, str] = "",
     ):
@@ -241,10 +241,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Note that if you use more than 2 channel renaming commands quickly, Discord automatically stops any more channel-name changes for 10 more minutes.
         Those channels will have to be renamed manually, or wait for the full 10 mins.
         """
-        # log command in console
-        await logging_utils.log_command(
-            "renamechannel", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if chan_b == "":
@@ -273,7 +269,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         except nextcord.Forbidden:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -287,16 +283,12 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
     @command_predicates.is_verified()
     @commands.command(name="makethread", aliases=["createthread"])
-    async def createthread(self, ctx, name: str):
+    async def createthread(self, ctx: commands.Context, name: str):
         """Command to create thread in same channel with given name
 
         Permission Category : Verified Roles only.
         Usage: `~createthread new-thread-name`
         """
-        # log command in console
-        await logging_utils.log_command(
-            "createthread", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if await discord_utils.is_thread(ctx, ctx.channel):
@@ -319,7 +311,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         else:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
             )
         await discord_utils.send_message(ctx, embed)
 
@@ -328,7 +320,10 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         name="createchan", aliases=["makechannel", "makechan", "createchannel"]
     )
     async def createchannel(
-        self, ctx, name: str, category_arg: Union[nextcord.CategoryChannel, str] = ""
+        self,
+        ctx: commands.Context,
+        name: str,
+        category_arg: Union[nextcord.CategoryChannel, str] = "",
     ):
         """Command to create channel in a given category. If given no category name, it defaults to current category.
 
@@ -336,10 +331,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~createchannel new-channel-name` (creates new-channel-name in the category it's called from)
         Usage: `~createchannel new-channel-name "Category Name"`
         """
-        # log command in console
-        await logging_utils.log_command(
-            "createchannel", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if category_arg == "":
@@ -397,7 +388,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         else:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
             )
         await discord_utils.send_message(ctx, embed)
 
@@ -405,8 +396,8 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     @commands.command(name="clonechan", aliases=["clonechannel", "chanclone"])
     async def clonechannel(
         self,
-        ctx,
-        chan_a: Union[nextcord.TextChannel, str],
+        ctx: commands.Context,
+        chan_a: Union[nextcord.TextChannel, nextcord.VoiceChannel, str],
         chan_b: str = "",
         origRoleorUser: Union[nextcord.Role, nextcord.Member, str, None] = None,
         targetRoleorUser: Union[nextcord.Role, nextcord.Member, str, None] = None,
@@ -414,6 +405,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         """Command to create channel in same category with given name.
         If user/role is specified, then syncs permissions as well.
         The channel created is just below the channel being cloned
+        Works for both text and voice channels.
 
         If making role/user changes, both old channel and new channel is necessary.
 
@@ -422,10 +414,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~clonechannel new-channel-name` (Clones current channel)
         Usage: `~clonechannel #chan1 chan2 @roleA @userB` (clones then syncs permission of A in chan1 with B in chan2)
         """
-        # log command in console
-        await logging_utils.log_command(
-            "clonechannel", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if chan_b == "":
@@ -515,14 +503,23 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
         try:
             # create channel
-            new_channel = await guild.create_text_channel(
-                new_channel_name, category=category, overwrites=old_channel.overwrites
-            )
+            if isinstance(old_channel, nextcord.VoiceChannel):
+                new_channel = await guild.create_voice_channel(
+                    new_channel_name,
+                    category=category,
+                    overwrites=old_channel.overwrites,
+                )
+            else:
+                new_channel = await guild.create_text_channel(
+                    new_channel_name,
+                    category=category,
+                    overwrites=old_channel.overwrites,
+                )
             await new_channel.edit(position=old_channel.position + 1)
         except nextcord.Forbidden:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
                 inline=False,
             )
             await discord_utils.send_message(ctx, embed)
@@ -558,7 +555,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
                 except nextcord.Forbidden:
                     embed.add_field(
                         name="Failed",
-                        value="Forbidden! Have you checked if the bot has the required permisisons?",
+                        value="Forbidden! Have you checked if the bot has the required permissions?",
                         inline=False,
                     )
                     await discord_utils.send_message(ctx, embed)
@@ -569,7 +566,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     @commands.command(name="shiftchan", aliases=["shiftchannel"])
     async def shiftchannel(
         self,
-        ctx,
+        ctx: commands.Context,
         chan_a_name: Union[nextcord.TextChannel, str],
         chan_b_name: Union[nextcord.TextChannel, str] = "",
     ):
@@ -585,9 +582,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~shiftchan "chana" top` (Shifts ChanA to top of category)
         Usage: `~shiftchan 0` (Shifts the current channel to top of category)
         """
-        await logging_utils.log_command(
-            "shiftchannel", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         pos_to_shift_to = -1
@@ -646,7 +640,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         except nextcord.Forbidden:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -654,12 +648,12 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         if pos_to_shift_to == 0:
             embed.add_field(
                 name="Success",
-                value=f"Succesfully moved channel {chan_to_shift.mention} to top of category {chan_to_shift.category}",
+                value=f"Successfully moved channel {chan_to_shift.mention} to top of category {chan_to_shift.category}",
             )
         else:
             embed.add_field(
                 name="Success",
-                value=f"Succesfully moved channel {chan_to_shift.mention} to just below {chan_shifting_to.mention}",
+                value=f"Successfully moved channel {chan_to_shift.mention} to just below {chan_shifting_to.mention}",
             )
         await discord_utils.send_message(ctx, embed)
 
@@ -669,16 +663,12 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
     @command_predicates.is_verified()
     @commands.command(name="renamevc", aliases=["renamevoicechan", "renamevoice"])
-    async def renamevoicechan(self, ctx, new_name: str):
+    async def renamevoicechan(self, ctx: commands.Context, new_name: str):
         """Command to rename the Voice Channel in which the user currently is
 
         Permission Category : Verified Roles only.
         Usage: `~renamevc "VC-Name"`
         """
-        # log command in console
-        await logging_utils.log_command(
-            "renamevoicechan", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         voice_chan_list = ctx.guild.voice_channels
@@ -705,7 +695,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         except nextcord.Forbidden:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
             )
             await discord_utils.send_message(ctx, embed)
             return
@@ -771,16 +761,13 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         name="sortcat",
         aliases=["categorysort", "catsort", "sortcategory", "reorderchannels"],
     )
-    async def categorysort(self, ctx, cat_name: str = ""):
+    async def categorysort(self, ctx: commands.Context, cat_name: str = ""):
         """Sort all channels in a category. Specifically for puzzle hunts, `solved-`, `backsolved-`, and `solvedish-`
         prefixes will be put behind channels without a prefix.
         Permission Category : Verified Roles only.
 
         Usage: `~categorysort`
         """
-        await logging_utils.log_command(
-            "categorysort", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if cat_name == "":
@@ -857,7 +844,9 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
     @command_predicates.is_verified()
     @commands.command(name="renamecat", aliases=["renamecategory"])
-    async def renamecategory(self, ctx, cat_a_name: str, cat_b_name: str = ""):
+    async def renamecategory(
+        self, ctx: commands.Context, cat_a_name: str, cat_b_name: str = ""
+    ):
         """Renames the given category to whatever is asked
 
         Note that if you use more than 2 category renaming commands quickly, Discord automatically stops any more channel-name changes for 10 more minutes.
@@ -867,10 +856,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~renamecat newname` (Changes current category name to newname)
         Usage: `~renamecat "CatA" CatB` (Changes CatA name to CatB)
         """
-        # log command in console
-        await logging_utils.log_command(
-            "renamecategory", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if cat_b_name == "":
@@ -898,7 +883,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         except nextcord.Forbidden:
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the `manage_channels` permisisons?",
+                value="Forbidden! Have you checked if the bot has the `manage_channels` permissions?",
                 inline=False,
             )
             # reply to user
@@ -913,7 +898,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
 
     @command_predicates.is_trusted()
     @commands.command(name="synccat", aliases=["synccategory", "catsync"])
-    async def synccategory(self, ctx, cat_name: str = ""):
+    async def synccategory(self, ctx: commands.Context, cat_name: str = ""):
         """Changes permissions of all channels in Current Category to be synced to Cat-permissions.
         So any channel with different role permissions set up is reverted.
 
@@ -921,9 +906,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~synccat` (Syncs current category)
         Usage: `~synccat "CatA"` (Syncs given category)
         """
-        await logging_utils.log_command(
-            "synccategory", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if cat_name == "":
@@ -962,7 +944,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
                 await start_msg.delete()
             embed.add_field(
                 name="Failed",
-                value="Forbidden! Have you checked if the bot has the required permisisons?",
+                value="Forbidden! Have you checked if the bot has the required permissions?",
                 inline=False,
             )
             # reply to user
@@ -982,10 +964,12 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     @commands.command(
         name="shiftcat", aliases=["shiftcategory", "movecategory", "movecat"]
     )
-    async def shiftcategory(self, ctx, cat_a_name: str, cat_b_name: str = ""):
+    async def shiftcategory(
+        self, ctx: commands.Context, cat_a_name: str, cat_b_name: str = ""
+    ):
         """Shifts a category to below another category.
 
-        Note : Use "0" or "top" instead to say "Top of the server". But if a category in the server is named "top" or "0" then the respective argument wont work
+        Note : Use "0" or "top" instead to say "Top of the server". But if a category in the server is named "top" or "0" then the respective argument won't work
 
         Permission Category : Verified Roles only.
         Usage: `~shiftcat "Category A" "Category B"` (Shifts Cat A to just below Cat B)
@@ -993,9 +977,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~shiftcat "Category A" 0` (Shifts Cat A to the top)
         Usage: `~shiftcat top` (Shifts the current category to the top)
         """
-        await logging_utils.log_command(
-            "shiftcategory", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         pos_to_shift_to = -1
@@ -1067,13 +1048,13 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         if pos_to_shift_to == 0:
             embed.add_field(
                 name="Success",
-                value=f"Succesfully moved Category `{cat_to_shift}` to top of the server.",
+                value=f"Successfully moved Category `{cat_to_shift}` to top of the server.",
                 inline=False,
             )
         else:
             embed.add_field(
                 name="Success",
-                value=f"Succesfully moved Category `{cat_to_shift}` to just below Category `{cat_shifting_to}`",
+                value=f"Successfully moved Category `{cat_to_shift}` to just below Category `{cat_shifting_to}`",
                 inline=False,
             )
         await discord_utils.send_message(ctx, embed)
@@ -1085,7 +1066,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
     )
     async def clonecategory(
         self,
-        ctx,
+        ctx: commands.Context,
         origCatName: str,
         targetCatName: str,
         origRole: Union[nextcord.Role, str] = None,
@@ -1100,9 +1081,6 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         Usage: `~clonecategory "Category A" "Category B"` (Clones Cat A as Cat B)
         Usage: `~clonecategory "Category A" "Category B" @RoleC @RoleD` (Clones Cat A as Cat B. Takes RoleC permission on Cat A, and replicates it with RoleD and Cat B)
         """
-        await logging_utils.log_command(
-            "clonecategory", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         # Input parsing I guess
@@ -1221,16 +1199,13 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         name="listcat",
         aliases=["lscategories", "listcats", "lscats", "listcategories", "lscat"],
     )
-    async def listcategories(self, ctx, cat_name: str = ""):
+    async def listcategories(self, ctx: commands.Context, cat_name: str = ""):
         """List all the categories in a server. If Category is provided, list all channels in it.
 
         Permission Category : Admin and Bot Owner only.
         Usage: `~listcat` (List all the categories in the server)
         Usage: `~listcat "Cat A"` (List all the channels in the given category)
         """
-        await logging_utils.log_command(
-            "listcategories", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if cat_name == "":
@@ -1276,15 +1251,12 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         aliases=["delcategory", "delcat", "deletecategory"],
     )
     @command_predicates.is_admin()
-    async def deletecategory(self, ctx, cat_name: str = ""):
+    async def deletecategory(self, ctx: commands.Context, cat_name: str = ""):
         """Delete a category in the server. Requires emoji confirmation
 
         Permission Category : Server Moderators only.
         Usage: `~deletecat "Cat A"` (List all the channels in the given category)
         """
-        await logging_utils.log_command(
-            "deletecategory", ctx.guild, ctx.channel, ctx.author
-        )
         embed = discord_utils.create_embed()
 
         if cat_name == "":
@@ -1322,7 +1294,7 @@ class DiscordChannelManagementCog(commands.Cog, name="Discord Channel Management
         # Send warning to user
         embed.add_field(
             name="Are you sure?",
-            value=f"This will delete the category `{category.name}` and all its channels. This is not reversable. Make sure you archive the category first before continuing. You have 15 seconds to confirm.",
+            value=f"This will delete the category `{category.name}` and all its channels. This is not reversible. Make sure you archive the category first before continuing. You have 15 seconds to confirm.",
         )
         embed.add_field(
             name="Channels to delete", value=f"{chr(10).join(channels)}", inline=False

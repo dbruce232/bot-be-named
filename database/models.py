@@ -1,5 +1,6 @@
 import os
 from sqlalchemy import Column, create_engine
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql.sqltypes import BIGINT, Boolean, String
 
@@ -39,6 +40,7 @@ class CustomCommands(Base):
     command_name = Column(String)
     command_return = Column(String)
     image = Column(Boolean)  # Flag for whether or not we need to send an embed
+    responses = Column(JSONB(none_as_null=True))
 
 
 class SheetTethers(Base):
@@ -55,6 +57,27 @@ class Prefixes(Base):
     server_id = Column(BIGINT, primary_key=True)
     server_name = Column(String)
     prefix = Column(String)
+
+
+class SummaryGrants(Base):
+    __tablename__ = "summary_grants"
+    server_id = Column(BIGINT)
+    server_name = Column(String)
+    channel_id = Column(BIGINT)
+    channel_name = Column(String)
+    role_id = Column(BIGINT)
+    role_name = Column(String)
+    channel_id_role_id = Column(String, primary_key=True)
+
+
+class SolveStreams(Base):
+    __tablename__ = "solve_streams"
+    server_id = Column(BIGINT)
+    server_name = Column(String)
+    # A sheet can post to several channels, so (sheet_key, channel_id) is the key
+    channel_id = Column(BIGINT, primary_key=True)
+    channel_name = Column(String)
+    sheet_key = Column(String, primary_key=True)  # spreadsheet id from sheet link
 
 
 Base.metadata.create_all(DATABASE_ENGINE)

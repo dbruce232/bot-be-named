@@ -2,6 +2,7 @@ import os
 import constants
 import sqlalchemy
 import nextcord
+import random
 from nextcord.ext import commands
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
@@ -11,7 +12,7 @@ from dotenv.main import load_dotenv
 load_dotenv(override=True)
 
 import database  # noqa: E402
-from utils import logging_utils, discord_utils  # noqa: E402
+from utils import logging_utils  # noqa: E402
 
 
 def get_prefix(client, message):
@@ -42,6 +43,7 @@ def main():
     @client.event
     async def on_ready():
         """When the bot starts up"""
+        logging_utils.print_with_timestamp("Bot is ready")
         await logging_utils.open_session()
         await client.change_presence(
             activity=nextcord.Activity(
@@ -60,7 +62,7 @@ def main():
                     )
                     session.execute(stmt)
                     session.commit()
-            print(
+            logging_utils.print_with_timestamp(
                 f"{client.user.name} has connected to the following guild: "
                 f"{guild.name} (id: {guild.id}) with prefix {database.PREFIXES[guild.id]}"
             )
@@ -84,7 +86,7 @@ def main():
     @client.event
     async def on_guild_join(guild: nextcord.Guild):
         """When the bot joins a new guild, add it to the database for prefixes"""
-        print(f"Joining {guild} -- Hi!")
+        logging_utils.print_with_timestamp(f"Joining {guild} -- Hi!")
         with Session(database.DATABASE_ENGINE) as session:
             stmt = insert(database.Prefixes).values(
                 server_id=guild.id,
@@ -103,7 +105,7 @@ def main():
     @client.event
     async def on_guild_remove(guild: nextcord.Guild):
         """When the bot leaves a guild, remove all database entries pertaining to that guild"""
-        print(f"Leaving {guild} -- Bye bye!")
+        logging_utils.print_with_timestamp(f"Leaving {guild} -- Bye bye!")
         with Session(database.DATABASE_ENGINE) as session:
             session.query(database.CustomCommands).filter_by(
                 server_id=guild.id
@@ -115,10 +117,34 @@ def main():
             session.commit()
             session.query(database.SheetTethers).filter_by(server_id=guild.id).delete()
             session.commit()
+            session.query(database.SummaryGrants).filter_by(server_id=guild.id).delete()
+            session.commit()
+            session.query(database.SolveStreams).filter_by(server_id=guild.id).delete()
+            session.commit()
         database.PREFIXES.pop(guild.id)
         database.VERIFIEDS.pop(guild.id)
         database.TRUSTEDS.pop(guild.id)
         database.CUSTOM_COMMANDS.pop(guild.id)
+
+    @client.event
+    async def on_guild_role_delete(role: nextcord.Role):
+        """When a role is deleted, remove the summary grants"""
+        with Session(database.DATABASE_ENGINE) as session:
+            session.query(database.SummaryGrants).filter_by(role_id=role.id).delete()
+            session.commit()
+
+    @client.event
+    async def on_guild_channel_delete(channel: nextcord.abc.GuildChannel):
+        """When a channel is deleted, remove its summary grants and solve streams"""
+        with Session(database.DATABASE_ENGINE) as session:
+            session.query(database.SummaryGrants).filter_by(
+                channel_id=channel.id
+            ).delete()
+            session.commit()
+            session.query(database.SolveStreams).filter_by(
+                channel_id=channel.id
+            ).delete()
+            session.commit()
 
     @client.event
     async def on_message(message: nextcord.Message):
@@ -141,94 +167,77 @@ def main():
                 message.guild is not None
                 and message.guild.id in database.CUSTOM_COMMANDS
             ):
-                command_return = None
-                # check if custom command is in cache for that server
-                if command_name in [
-                    command.lower()
-                    for command in database.CUSTOM_COMMANDS[message.guild.id].keys()
-                ]:
-                    command_return = database.CUSTOM_COMMANDS[message.guild.id][
-                        command_name
-                    ][0]
+                # Check the cache for this server's custom command first, then look for the global one.
+                # Each entry is (command_return, is_image, responses). TODO: make it a class
+                custom_command = database.CUSTOM_COMMANDS[message.guild.id].get(
+                    command_name
+                ) or database.CUSTOM_COMMANDS.get(constants.DB_GLOBAL, {}).get(
+                    command_name
+                )
 
-                # Command found in cache
-                if command_return is not None:
-                    # Image, so we use normal text.
-                    if database.CUSTOM_COMMANDS[message.guild.id][command_name][1]:
-                        await message.channel.send(command_return)
-                    # Non-Image, so use embed.
-                    else:
-                        embed = nextcord.Embed(
-                            description=command_return, color=constants.EMBED_COLOR
-                        )
-                        await message.channel.send(embed=embed)
-                    return
-
-                # The custom command is not in the cache
-                # Query the DB to see if we have a command with that name
-                with Session(database.DATABASE_ENGINE) as session:
-                    # Checking for this server
-                    result = (
-                        session.query(database.CustomCommands)
-                        .filter_by(
-                            server_id_command=f"{message.guild.id} {command_name}"
-                        )
-                        .first()
-                    )
-                    # Check for global custom commands
-                    # TODO - confirm global cc trigger works
-                    if result is None:
+                # Find it in the DB if it's not in the cache
+                if custom_command is None:
+                    with Session(database.DATABASE_ENGINE) as session:
+                        # Check in this server
                         result = (
                             session.query(database.CustomCommands)
                             .filter_by(
-                                server_id_command=f"{constants.DB_GLOBAL} {command_name}"
+                                server_id_command=f"{message.guild.id} {command_name}"
                             )
                             .first()
                         )
-                    if result is not None:
-                        if result.image:
-                            await message.channel.send(result.command_return)
-                            return
-                        else:
-                            embed = nextcord.Embed(
-                                description=result.command_return,
-                                color=constants.EMBED_COLOR,
+                        # Check for global custom commands
+                        if result is None:
+                            result = (
+                                session.query(database.CustomCommands)
+                                .filter_by(
+                                    server_id_command=f"{constants.DB_GLOBAL} {command_name}"
+                                )
+                                .first()
                             )
-                            await message.channel.send(embed=embed)
-                        # Adds to cache. NOTE - This adds to cache even if local or global
-                        database.CUSTOM_COMMANDS[message.guild.id][command_name] = (
+                        # Not a custom command found in the DB either
+                        if result is None:
+                            return
+                        custom_command = (
                             result.command_return,
                             result.image,
+                            result.responses,
                         )
 
-    client.run(os.getenv("DISCORD_TOKEN"))
+                        # Add to cache under the id it was found under
+                        database.CUSTOM_COMMANDS.setdefault(result.server_id, {})[
+                            command_name
+                        ] = custom_command
+
+                command_return, is_image, responses = custom_command
+
+                # If it has random responses, pick one of them
+                if responses:
+                    command_return = random.choice(responses)
+
+                # Image, so use normal text
+                if is_image:
+                    await message.channel.send(command_return)
+
+                # Non-image, so use embed
+                else:
+                    embed = nextcord.Embed(
+                        description=command_return, color=constants.EMBED_COLOR
+                    )
+                    await message.channel.send(embed=embed)
+
+    @client.before_invoke
+    async def log_command(ctx: commands.Context):
+        """Log every command in the console/webhook, just before it runs and after the checks pass."""
+        await logging_utils.log_command(
+            ctx.command.qualified_name, ctx.guild, ctx.channel, ctx.author
+        )
 
     @client.event
     async def on_close():
         await logging_utils.close_session()
 
-    
-    @client.event
-    async def on_command_error(self, ctx, error):
-        """Intercept ~help a_custom_command errors"""
-        if isinstance(error, commands.CommandNotFound):
-            command_name = str(ctx.invoked_with).lower() if ctx.invoked_with else None
-
-            if command_name:
-                if ctx.guild and command_name in database.CUSTOM_COMMANDS.get(ctx.guild.id, {}):
-                    embed = discord_utils.create_embed()
-                    embed.add_field(
-                        name="Thats a custom command!",
-                        value=f'The command "{command_name}" is a custom command created for this server! '
-                        f"Use `~help Custom Commands` to see how they work!"
-                        f"Your custom command response is: {database.CUSTOM_COMMANDS[ctx.guild.id][command_name]}",
-                        inline=False,
-                    )
-                    await discord_utils.send_message(ctx, embed)
-                    return
-        # If not a custom command, let the error propagate normally
-        # TODO global custom commands
-
+    client.run(os.getenv("DISCORD_TOKEN"))
 
 
 if __name__ == "__main__":

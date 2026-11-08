@@ -53,6 +53,10 @@ class HelpCommand(commands.MinimalHelpCommand):
         prefix = self.context.clean_prefix
         embed = discord_utils.create_embed()
         embed.title = "Bot Commands"
+        embed.set_author(
+            name=self.context.bot.user.name,
+            icon_url=self.context.bot.user.display_avatar.url,
+        )
         description = self.context.bot.description
         if description:
             embed.description = description

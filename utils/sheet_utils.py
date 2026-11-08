@@ -5,10 +5,11 @@ import gspread
 import database
 from sqlalchemy.sql.expression import insert
 from sqlalchemy.orm import Session
-from typing import Union
+from typing import Optional, Union
 import emoji
 
-from nextcord.ext.commands import Context
+from datetime import datetime, timezone
+from nextcord.ext import commands
 
 """
 Sheets utils. Useful for any commands that require Google Sheets.
@@ -63,7 +64,11 @@ def addsheettethergeneric(
 
 
 async def sheetcrabgeneric(
-    gspread_client, ctx, tab_name: str, is_meta: bool, to_pin: str = ""
+    gspread_client,
+    ctx: commands.Context,
+    tab_name: str,
+    is_meta: bool,
+    to_pin: str = "",
 ):
     embed = discord_utils.create_embed()
 
@@ -113,7 +118,7 @@ async def sheetcrabgeneric(
 
 async def chancrabgeneric(
     gspread_client,
-    ctx,
+    ctx: commands.Context,
     chan_name: str,
     chan_type: str,
     is_meta: bool,
@@ -184,7 +189,7 @@ async def chancrabgeneric(
     if not new_chan:
         embed.add_field(
             name="Failed",
-            value="Forbidden! Have you checked if the bot has the required permisisons?",
+            value="Forbidden! Have you checked if the bot has the required permissions?",
         )
         await discord_utils.send_message(ctx, embed)
         return None, None, None
@@ -245,7 +250,23 @@ async def chancrabgeneric(
     return curr_sheet_link, newsheet, new_chan
 
 
-def findsheettether(curr_cat_id: int, curr_chan_id: int, curr_thread_id: int = None):
+def normalize_status(status: str) -> str:
+    """Matches the input to a known status, regardless of case. e.g., "in progress" -> "In Progress"
+    Custom statuses return unchanged"""
+    for recognized_status in sheets_constants.status_dict:
+        if status.lower() == recognized_status.lower():
+            return recognized_status
+    return status
+
+
+def get_timestamp() -> str:
+    """Finds the current UTC timestamp."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def findsheettether(
+    curr_cat_id: int, curr_chan_id: int, curr_thread_id: Optional[int] = None
+):
     """For finding the appropriate sheet tethering for a given category or channel"""
     result = None
     tether_type = None
@@ -286,7 +307,11 @@ def get_sheet_from_key_or_link(
     try:
         sheet = gspread_client.open_by_url(sheet_key_or_link)
         return sheet
-    except gspread.exceptions.APIError:
+    except (
+        gspread.exceptions.APIError,
+        gspread.exceptions.SpreadsheetNotFound,
+        PermissionError,
+    ):
         return None
     # Given str was not a link
     except gspread.exceptions.NoValidUrlKeyFound:
@@ -296,12 +321,21 @@ def get_sheet_from_key_or_link(
         sheet = gspread_client.open_by_key(sheet_key_or_link)
         return sheet
     # Entity Not Found
-    except gspread.exceptions.APIError:
+    except (
+        gspread.exceptions.APIError,
+        gspread.exceptions.SpreadsheetNotFound,
+        PermissionError,
+    ):
         return None
 
 
 async def sheetcreatetabgeneric(
-    gspread_client, ctx, curr_chan, curr_cat, tab_name, template_or_meta
+    gspread_client,
+    ctx: commands.Context,
+    curr_chan,
+    curr_cat,
+    tab_name,
+    template_or_meta,
 ):
     """Actually creates the sheet and handles errors"""
     embed = discord_utils.create_embed()
@@ -432,10 +466,13 @@ class OverviewSheet:
 
     def get_cell_value(self, label: str) -> str:
         row, col = gspread.utils.a1_to_rowcol(label)
-        return self.overview_data[row - 1][col - 1]
+        try:
+            return self.overview_data[row - 1][col - 1]
+        except IndexError:
+            return ""
 
     def find_row_of_channel(
-        self, ctx: Context
+        self, ctx: commands.Context
     ) -> tuple[int, None] | tuple[None, nextcord.Embed]:
         chan_id = str(ctx.channel.id)
         for i, row in enumerate(self.overview_data):
