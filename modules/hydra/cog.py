@@ -1343,7 +1343,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~solvedhydra`
         Usage: `~solvedhydra "answer"`
         """
-        await self.statushydra(ctx, "solved", answer)
+        await self.statushydra(ctx, "solved", *answer)
 
     @command_predicates.is_solver()
     @commands.command(name="backsolvedhydra")
@@ -1355,7 +1355,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~backsolvedhydra`
         Usage: `~backsolvedhydra "answer"`
         """
-        await self.statushydra(ctx, "backsolved", answer)
+        await self.statushydra(ctx, "backsolved", *answer)
 
     @command_predicates.is_solver()
     @commands.command(name="solvedishhydra")
@@ -1367,7 +1367,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~solvedishhydra`
         Usage: `~solvedishhydra "answer"`
         """
-        await self.statushydra(ctx, "solvedish", answer)
+        await self.statushydra(ctx, "solvedish", *answer)
 
     @command_predicates.is_solver()
     @commands.command(name="unsolvedhydra")
@@ -1379,7 +1379,7 @@ class HydraCog(commands.Cog, name="Hydra"):
         Usage: `~unsolvedhydra` (Removes the answer from the sheet)
         Usage: `~unsolvedhydra "answer"` (Updates the answer from the sheet to "answer")
         """
-        await self.statushydra(ctx, "In Progress", answer)
+        await self.statushydra(ctx, "In Progress", *answer)
 
     @command_predicates.is_solver()
     @commands.command(name="slainhydra", aliases=["donehydra"])
